@@ -143,10 +143,10 @@ class SiT5721:
         def stability_status(flag):
             # print(flag)
             if (flag == 1):
-                error_status = "stabilized"
+                stability_status = "stabilized"
             else:
-                error_status = "unstabilized"
-            return error_status
+                stability_status = "unstabilized"
+            return stability_status
 
         self.error_status_str = error_status(self.error_status_flag_uint)
         self.stability_status_str = stability_status(self.stability_flag_uint)
