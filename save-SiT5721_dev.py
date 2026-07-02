@@ -1,0 +1,733 @@
+#!/bin/python3
+import smbus
+import struct
+import datetime
+from zoneinfo import ZoneInfo
+import configparser
+import os
+
+bus = smbus.SMBus(0)
+address = 0x60
+
+# Note that a float has 7.225 decimal digit precision
+new_pull_value = 0.000000000  # default 0.000000000
+target_pull_value = 0.000000000  # default 0.000000000
+
+new_pull_range = 0.000010000  # default 0.000010000 (10E-06)
+
+# A positive value increases the output frequency, compensating for a negative aging trend.
+# 2.0000000e-14 = 1.728ppb/day
+new_aging_compensation = 0.000000000  # default 0.000000000
+
+new_max_freq_ramp_rate = 0.000010000  # default 0.000010000 (1.00E-05)
+
+settings_file = "SiT-settings2.ini"
+settings_section = "Current"
+
+
+class SiT5721_settings:
+    def __init__(self):
+        self.config = configparser.ConfigParser()
+
+        self.config_ver = float(1.0)
+        self.datetime = float("NaN")
+        self.pull_value = float("NaN")
+        self.pull_range = float("NaN")
+        self.aging_compensation = float("NaN")
+        self.max_freq_ramp_rate = float("NaN")
+
+        self.default_pull_value = 0.00000000
+        self.default_pull_range = 0.000010000
+        self.default_aging_compensation = 0.00000000
+        self.default_max_freq_ramp_rate = 0.000010000
+
+        # self.config['DEFAULT']['datetime'] = datetime.datetime.now(tz=datetime.timezone.utc).isoformat('T','auto')
+        self.config["DEFAULT"] = {
+            "datetime": datetime.datetime(1970, 1, 1, tzinfo=ZoneInfo("UTC")).isoformat(
+                "T", "auto"
+            ),
+            "config_ver": self.config_ver,
+            "pull_value": self.default_pull_value,
+            "pull_range": self.default_pull_range,
+            "aging_compensation": self.default_aging_compensation,
+            "max_freq_ramp_rate": self.default_max_freq_ramp_rate,
+        }
+
+    def is_default(
+        self,
+        test_pull_value,
+        test_pull_range,
+        test_aging_compensation,
+        test_max_freq_ramp_rate,
+    ):
+        return_value = True
+
+        #  Cook default values
+        #  Due to the SiT5721 being only 4 byte float, we need to reduce the precision to match
+        cooked_pull_value = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(
+                            list(struct.pack("f", self.default_pull_value)))
+                    )
+                ]
+            )
+        )
+
+        cooked_pull_range = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(
+                            list(struct.pack("f", self.default_pull_range)))
+                    )
+                ]
+            )
+        )
+
+        cooked_aging_compensation = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f",
+                        bytes(
+                            list(struct.pack("f", self.default_aging_compensation))),
+                    )
+                ]
+            )
+        )
+
+        cooked_max_freq_ramp_rate = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f",
+                        bytes(
+                            list(struct.pack("f", self.default_max_freq_ramp_rate))),
+                    )
+                ]
+            )
+        )
+
+        if test_pull_value != cooked_pull_value:
+            return_value = False
+        if test_pull_range != cooked_pull_range:
+            return_value = False
+        if test_aging_compensation != cooked_aging_compensation:
+            return_value = False
+        if test_max_freq_ramp_rate != cooked_max_freq_ramp_rate:
+            return_value = False
+
+        # print(test_pull_value, cooked_pull_value)
+        # print(test_pull_range, cooked_pull_range)
+        # print(test_aging_compensation, cooked_aging_compensation)
+        # print(test_max_freq_ramp_rate, cooked_max_freq_ramp_rate)
+        # print(return_value)
+
+        return return_value
+
+    def create_file(self, settings_file):
+
+        with open(settings_file, "w") as configfile:
+            self.config.write(configfile)
+
+    def read_file(self, settings_file, settings_section):
+        if os.path.exists(settings_file) == True:
+            self.config.read(settings_file)
+
+        return (
+            float(self.config[settings_section]["pull_value"]),
+            float(self.config[settings_section]["pull_range"]),
+            float(self.config[settings_section]["aging_compensation"]),
+            float(self.config[settings_section]["max_freq_ramp_rate"]),
+            self.config[settings_section]["datetime"],
+            float(self.config[settings_section]["config_ver"]),
+        )
+
+        # else:
+        # self.create_file(settings_file)
+        # self.config.read(settings_file)
+
+    def write_file(self, settings_file, settings_section):
+        self.config[settings_section] = dict()
+        self.config[settings_section]["config_ver"] = str(self.config_ver)
+        self.config[settings_section]["datetime"] = datetime.datetime.now(
+            tz=datetime.timezone.utc
+        ).isoformat("T", "auto")
+        self.config[settings_section]["pull_value"] = str(self.pull_value)
+        self.config[settings_section]["pull_range"] = str(self.pull_range)
+        self.config[settings_section]["aging_compensation"] = str(
+            self.aging_compensation
+        )
+        self.config[settings_section]["max_freq_ramp_rate"] = str(
+            self.max_freq_ramp_rate
+        )
+
+        with open(settings_file, "w") as configfile:
+            self.config.write(configfile)
+            configfile.flush()
+            os.fsync(configfile)
+
+    def print(self, settings_file, settings_section):
+        print("settings_file         ", settings_file)
+        print("settings_section      ", settings_section)
+
+        if self.datetime == float("NaN"):
+            print("datetime              * NaN")
+        else:
+            print("datetime              ", self.datetime)
+
+        print("Pull Value            ", self.pull_value)
+        print("Pull Range            ", self.pull_range)
+        print("Aging compensation    ", self.aging_compensation)
+        print("Max. Freq Ramp Rate   ", self.max_freq_ramp_rate)
+
+
+class SiT5721:
+    def __init__(self, bus, address):
+        self.bus = bus
+        self.address = address
+        self.read_SiT_static()
+        self.read_SiT_config()
+        self.read_SiT_operation()
+        self.read_SiT_dynamic()
+
+        self.calc_SiT_current_compensation()
+        self.calc_SiT_new_pull_value_from_target(target_pull_value=0.0000000)
+
+    def read_SiT_static(self):
+        # From SiTime datasheet for SiT5721, rev 1.0
+
+        # 0x50, Part Number, 256 bytes, ASCII, , R, Factory Set
+        # ***Note that smbus cannot read 256 bytes, so set to 32 bytes***
+        self.part_num_str = "".join(
+            [chr(item) for item in bus.read_i2c_block_data(address, 0x50, 32)]
+        )
+
+        # 0x52, Nominal Frequency, 32 bytes, ASCII, MHz, R, Factory Set
+        self.nomfreq_str = "".join(
+            [chr(item) for item in bus.read_i2c_block_data(address, 0x52, 32)]
+        )
+
+        # 0x56, Lot and Serial Numbers, 32 bytes, ASCII, , R, Factory Set
+        self.lot_sn_str = "".join(
+            [chr(item) for item in bus.read_i2c_block_data(address, 0x56, 32)]
+        )
+
+        # 0x57, Fabrication Date, 32 bytes, ASCII, , R, Factory Set
+        self.fab_date_str = "".join(
+            [chr(item) for item in bus.read_i2c_block_data(address, 0x57, 32)]
+        )
+
+    def read_SiT_config(self):
+        # From SiTime datasheet for SiT5721, rev 1.0
+
+        # 0x61, Pull Value, 4 bytes, Float, ± Fractional Offset, R/W, Default 0
+        self.pull_value = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x61, 4))
+                    )
+                ]
+            )
+        )
+
+        # 0x62, Pull Range, 4 bytes, Float, Fractional Offset, R/W, Default 10E-06
+        self.pull_range = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x62, 4))
+                    )
+                ]
+            )
+        )
+
+        # 0x63, Aging Compensation, 4 bytes, Float, ± Fractional Offset, R/W, Default 0
+        self.aging_compensation = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x63, 4))
+                    )
+                ]
+            )
+        )
+
+        # 0x64, Max Freq. Ramp Rate, 4 bytes, Float, Fractional Offset, R/W, Default 1.00E-05
+        self.max_freq_ramp_rate = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x64, 4))
+                    )
+                ]
+            )
+        )
+
+    def read_SiT_operation(self):
+        # From SiTime datasheet for SiT5721, rev 1.0
+        # Read less critical values
+        # -- 0xAB, Resonator Temp., 4 bytes, Float, Degrees C, R
+        self.temperature_float = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xA1, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xA3, Micro. Supply Voltage, 4 bytes, Float, Volts, R
+        self.supply_voltage_float = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xA3, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xA7, Heater Power, 4 bytes, Float, Watts, R
+        self.heater_power_float = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xA7, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xB0, Temp. Error, 4 bytes, Float, Degrees C, R
+        self.temperature_err_float = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xB0, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xB1, Power Target, 4 bytes, Float, Watts, R
+        self.heater_power_target_float = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xB1, 4))
+                    )
+                ]
+            )
+        )
+
+    def read_SiT_dynamic(self):
+        # From SiTime datasheet for SiT5721, rev 1.0
+        # Read critical values
+        # -- 0xA0, Time Since Power Up, 4 bytes, Unsigned Int, Seconds, R
+        self.uptime_uint = int(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "I", bytes(bus.read_i2c_block_data(address, 0xA0, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xAB, Total Offset Written, 4 bytes, Float, ± Fractional Offset, R
+        self.total_offset_written = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0xAB, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xAE, Error Status Flag, 4 bytes, Unsigned Int, Bit Field, R
+        self.error_status_flag_uint = int(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "I", bytes(bus.read_i2c_block_data(address, 0xAE, 4))
+                    )
+                ]
+            )
+        )
+
+        # -- 0xAF, Stability Flag, 4 bytes, Unsigned Int, , R
+        self.stability_flag_uint = int(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "I", bytes(bus.read_i2c_block_data(address, 0xAF, 4))
+                    )
+                ]
+            )
+        )
+
+        # Create status strings from flags
+        self.error_status_str = "undefined"
+        self.stability_status_str = "undefined"
+
+        def error_status(flag):
+            # print(flag)
+            if flag == 7:
+                error_status = "good"
+            else:
+                error_status = "ERROR"
+            return error_status
+
+        def stability_status(flag):
+            # print(flag)
+            if flag == 1:
+                error_status = "stabilized"
+            else:
+                error_status = "unstabilized"
+            return error_status
+
+        self.error_status_str = error_status(self.error_status_flag_uint)
+        self.stability_status_str = stability_status(self.stability_flag_uint)
+
+    def calc_SiT_current_compensation(self):
+        # self.read_SiT_config()
+        # self.read_SiT_dynamic()
+
+        self.current_compensation = self.total_offset_written - self.pull_value
+        # print("Current Compensation   {:=+.8g} part/s".format(self.current_compensation), end='\n')
+        return self.current_compensation
+
+    def calc_SiT_new_pull_value_from_target(self, target_pull_value):
+
+        self.new_pull_value = target_pull_value - self.calc_SiT_current_compensation()
+        # print("Target Pull Value      {:=+.8g} ppm".format(target_pull_value / pow(10, -6)), end='\n')
+        # print("New Pull Value         {:=+.8g} ppm".format(self.new_pull_value / pow(10, -6)), end='\n')
+
+        return self.new_pull_value
+
+    def set_pull_value_from_target(self, target_pull_value):
+        self.set_pull_value(
+            self.calc_SiT_new_pull_value_from_target(target_pull_value))
+
+    def set_pull_value(self, new_pull_value):
+        # bus.write_i2c_block_data(address, 0x61, list(struct.pack('f', new_pull_value)))
+        self.pull_value = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x61, 4))
+                    )
+                ]
+            )
+        )
+
+    def set_pull_range(self, new_pull_range):
+        bus.write_i2c_block_data(address, 0x62, list(
+            struct.pack("f", new_pull_range)))
+        self.pull_range = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x62, 4))
+                    )
+                ]
+            )
+        )
+
+    def set_aging_comp(self, new_aging_compensation):
+        # bus.write_i2c_block_data(address, 0x63, list(struct.pack('f', new_aging_compensation)))
+        self.aging_compensation = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x63, 4))
+                    )
+                ]
+            )
+        )
+
+    def set_max_freq_ramp_rate(self, new_max_freq_ramp_rate):
+        bus.write_i2c_block_data(
+            address, 0x64, list(struct.pack("f", new_max_freq_ramp_rate))
+        )
+        self.max_freq_ramp_rate = float(
+            "".join(
+                [
+                    str(item)
+                    for item in struct.unpack(
+                        "f", bytes(bus.read_i2c_block_data(address, 0x64, 4))
+                    )
+                ]
+            )
+        )
+
+    def reset_error(self):
+        bus.write_i2c_block_data(
+            address, 0xE1, list(0x64, 0x01))  # Will it work?
+
+    def print_SiT_static(self):
+        # self.read_SiT_static()
+
+        print("Part Number            ", self.part_num_str, end="\n")
+        print("Nominal frequency      ", self.nomfreq_str, end="\n")
+        print("Lot-SN                 ", self.lot_sn_str, end="\n")
+        print("Fabrication            ", self.fab_date_str, end="\n")
+        print()
+
+    def print_SiT_operation(self):
+        # self.read_SiT_operation()
+
+        print(
+            "Supply voltage          {:.8g} V".format(
+                self.supply_voltage_float),
+            end="\n",
+        )
+        print(
+            "Resonator temperature {:=3.8g}°C".format(self.temperature_float), end="\n"
+        )
+        print(
+            "Temperature error      {:=+3.8g}°C".format(
+                self.temperature_err_float),
+            end="\n",
+        )
+        print(
+            "Heater power            {:.8g} W".format(self.heater_power_float), end="\n"
+        )
+        print(
+            "Target power            {:.8g} W".format(
+                self.heater_power_target_float),
+            end="\n",
+        )
+        print()
+
+    def print_SiT_dynamic(self):
+        # self.read_SiT_dynamic()
+        # self.read_SiT_config()
+
+        print(
+            "Uptime                {:8d}s, {}".format(
+                self.uptime_uint, datetime.timedelta(seconds=self.uptime_uint)
+            ),
+            end="\n",
+        )
+        print()
+        print("Error status flag      ", self.error_status_str, end="\n")
+        print("Stability flag         ", self.stability_status_str, end="\n")
+        print()
+        print(
+            "Pull Value             {:=+.8g} ppm".format(
+                self.pull_value / pow(10, -6)),
+            end="\n",
+        )
+        print(
+            "Pull Range              {:=.8g} ppm".format(
+                self.pull_range / pow(10, -6)),
+            end="\n",
+        )
+        print(
+            "Aging compensation     {:=+.8g} part/s".format(
+                self.aging_compensation),
+            end="\n",
+        )
+        # print("Aging compensation     {:=+.8g} ppb/s".format(self.aging_compensation / pow(10, -9)), end='\n')
+        print(
+            "Max. Freq Ramp Rate     {:=.8g} ppm".format(
+                self.max_freq_ramp_rate / pow(10, -6)
+            ),
+            end="\n",
+        )
+        print()
+        print(
+            "Total offset written   {:=+.8g} ppm".format(
+                self.total_offset_written / pow(10, -6)
+            ),
+            end="\n",
+        )
+
+    def print_SiT_derived(self):
+        print(
+            "Target Pull Value      {:=+.8g} ppm".format(
+                target_pull_value / pow(10, -6)
+            ),
+            end="\n",
+        )
+        print(
+            "Current Compensation   {:=+.8g} part/s".format(
+                self.calc_SiT_current_compensation(), end="\n"
+            )
+        )
+        print(
+            "New Pull Value         {:=+.8g} ppm".format(
+                self.calc_SiT_new_pull_value_from_target(target_pull_value)
+                / pow(10, -6)
+            ),
+            end="\n",
+        )
+
+    def print_SiT_short(self):
+        # self.read_SiT_dynamic()
+        # self.read_SiT_config()
+
+        print("Error status flag      ", self.error_status_str, end="\n")
+        print(
+            "Pull Value             {:=+.8g} ppm".format(
+                self.pull_value / pow(10, -6)),
+            end="\n",
+        )
+        print(
+            "Pull Range              {:=.8g} ppm".format(
+                self.pull_range / pow(10, -6)),
+            end="\n",
+        )
+        print(
+            "Aging compensation     {:=+.8g} part/s".format(
+                self.aging_compensation),
+            end="\n",
+        )
+        # print("Aging compensation     {:=+.8g} ppb/s".format(self.aging_compensation / pow(10, -9)), end='\n')
+        print(
+            "Max. Freq Ramp Rate     {:=.8g} ppm".format(
+                self.max_freq_ramp_rate / pow(10, -6)
+            ),
+            end="\n",
+        )
+        print()
+        print(
+            "Total offset written   {:=+.8g} ppm".format(
+                self.total_offset_written / pow(10, -6)
+            ),
+            end="\n",
+        )
+
+
+def main():
+    # config = configparser.ConfigParser()
+    siTime = SiT5721(bus, address)
+    SiT_config = SiT5721_settings()
+
+    # siTime.read_SiT_static()  # Populated on init
+    # siTime.read_SiT_config()  # Populated on init
+    # siTime.read_SiT_operation()  # Populated on init
+    # siTime.read_SiT_dynamic()  # Populated on init
+
+    # (   SiT_config.pull_value,
+    # SiT_config.pull_range,
+    # SiT_config.aging_compensation,
+    # SiT_config.max_freq_ramp_rate,
+    # SiT_config.datetime) = SiT_config.read_file(settings_file, settings_section)
+
+    # siTime.print_SiT_static()
+    # siTime.print_SiT_operation()
+    siTime.print_SiT_dynamic()
+    # siTime.print_SiT_derived()
+
+    # siTime.set_pull_value(new_pull_value)
+    # siTime.set_pull_value_from_target(target_pull_value)  # For future instantaneous use
+    # siTime.set_pull_range(new_pull_range)
+    # siTime.set_aging_comp(new_aging_compensation)
+    # siTime.set_max_freq_ramp_rate(new_max_freq_ramp_rate)
+
+    # siTime.read_SiT_config()
+    # siTime.read_SiT_dynamic()  # Refresh!
+
+    # print()
+    # print("--- Updated:")
+    # siTime.print_SiT_short()
+
+    # print("pre-write:")
+    # print_settings(settings_file, SiT_config.pull_value, SiT_config.pull_range, SiT_config.aging_compensation, SiT_config.max_freq_ramp_rate, SiT_config.datetime)
+
+    return_value = 0
+
+    if (
+        SiT_config.is_default(
+            siTime.pull_value,
+            siTime.pull_range,
+            siTime.aging_compensation,
+            siTime.max_freq_ramp_rate,
+        )
+        == False
+    ):
+
+        SiT_config.pull_value = siTime.total_offset_written
+        SiT_config.pull_range = siTime.pull_range
+        SiT_config.aging_compensation = siTime.aging_compensation
+        SiT_config.max_freq_ramp_rate = siTime.max_freq_ramp_rate
+
+        SiT_config.write_file(settings_file, settings_section)
+
+        (
+            SiT_config.pull_value,
+            SiT_config.pull_range,
+            SiT_config.aging_compensation,
+            SiT_config.max_freq_ramp_rate,
+            SiT_config.datetime,
+            SiT_config.config_ver,
+        ) = SiT_config.read_file(settings_file, settings_section)
+
+        print()
+
+        print("post-write:")
+        SiT_config.print(settings_file, settings_section)
+
+        print()
+
+        if SiT_config.pull_value == siTime.total_offset_written:
+            print("Pull Value            match!")
+        else:
+            print("Pull Value            MISMATCH!")
+            return_value = 1
+
+        if SiT_config.pull_range == siTime.pull_range:
+            print("Pull Range            match!")
+        else:
+            print("Pull Range            MISMATCH!")
+            return_value = 1
+
+        if SiT_config.aging_compensation == siTime.aging_compensation:
+            print("Aging compensation    match!")
+        else:
+            print("Aging compensation    MISMATCH!")
+            return_value = 1
+
+        if SiT_config.max_freq_ramp_rate == siTime.max_freq_ramp_rate:
+            print("Max. Freq Ramp Rate   match!")
+        else:
+            print("Max. Freq Ramp Rate   MISMATCH!")
+            return_value = 1
+
+    else:
+        print("Not saving, values are default!")
+        return_value = 2
+
+    return return_value
+
+
+if __name__ == "__main__":
+    main()
