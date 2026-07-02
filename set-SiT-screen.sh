@@ -6,4 +6,4 @@ if screen -list | grep -qE '\.SiT-save[[:space:]]'; then
 fi
 
 cd /home/ve2mrx/project/SiT5721
-screen -d -m -S SiT-save watch -n 600 /home/ve2mrx/project/SiT5721/save-SiT5721_dev.py
+screen -d -m -S SiT-save watch -n 600 /home/ve2mrx/project/SiT5721/save-SiT5721.py
