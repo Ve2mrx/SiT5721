@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify/start the SiT5721 save-state screen after restart
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/ve2mrx/project/SiT5721/restart-SiT-screen.sh
+
+[Install]
+WantedBy=default.target
