@@ -30,7 +30,7 @@ class SiT5721_settings:
     def __init__(self):
         self.config = configparser.ConfigParser()
 
-        self.config_ver = float(1.0)
+        self.config_ver = float(1.1)  # 1.1: pull_value renamed to total_offset_written
         self.datetime = float("NaN")
         self.total_offset_written = float("NaN")
         self.pull_range = float("NaN")
