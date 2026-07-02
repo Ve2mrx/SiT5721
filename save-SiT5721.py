@@ -32,7 +32,7 @@ class SiT5721_settings:
 
         self.config_ver = float(1.0)
         self.datetime = float("NaN")
-        self.pull_value = float("NaN")
+        self.total_offset_written = float("NaN")
         self.pull_range = float("NaN")
         self.aging_compensation = float("NaN")
         self.max_freq_ramp_rate = float("NaN")
@@ -48,7 +48,7 @@ class SiT5721_settings:
                 "T", "auto"
             ),
             "config_ver": self.config_ver,
-            "pull_value": self.default_pull_value,
+            "total_offset_written": self.default_pull_value,
             "pull_range": self.default_pull_range,
             "aging_compensation": self.default_aging_compensation,
             "max_freq_ramp_rate": self.default_max_freq_ramp_rate,
@@ -142,7 +142,7 @@ class SiT5721_settings:
             self.config.read(settings_file)
 
         return (
-            float(self.config[settings_section]["pull_value"]),
+            float(self.config[settings_section]["total_offset_written"]),
             float(self.config[settings_section]["pull_range"]),
             float(self.config[settings_section]["aging_compensation"]),
             float(self.config[settings_section]["max_freq_ramp_rate"]),
@@ -160,7 +160,8 @@ class SiT5721_settings:
         self.config[settings_section]["datetime"] = datetime.datetime.now(
             tz=datetime.timezone.utc
         ).isoformat("T", "auto")
-        self.config[settings_section]["pull_value"] = str(self.pull_value)
+        self.config[settings_section]["total_offset_written"] = str(
+            self.total_offset_written)
         self.config[settings_section]["pull_range"] = str(self.pull_range)
         self.config[settings_section]["aging_compensation"] = str(
             self.aging_compensation
@@ -183,7 +184,7 @@ class SiT5721_settings:
         else:
             print("datetime              ", self.datetime)
 
-        print("Pull Value            ", self.pull_value)
+        print("Total Offset Written  ", self.total_offset_written)
         print("Pull Range            ", self.pull_range)
         print("Aging compensation    ", self.aging_compensation)
         print("Max. Freq Ramp Rate   ", self.max_freq_ramp_rate)
@@ -637,7 +638,7 @@ def main():
     # siTime.read_SiT_operation()  # Populated on init
     # siTime.read_SiT_dynamic()  # Populated on init
 
-    # (   SiT_config.pull_value,
+    # (   SiT_config.total_offset_written,
     # SiT_config.pull_range,
     # SiT_config.aging_compensation,
     # SiT_config.max_freq_ramp_rate,
@@ -662,7 +663,7 @@ def main():
     # siTime.print_SiT_short()
 
     # print("pre-write:")
-    # print_settings(settings_file, SiT_config.pull_value, SiT_config.pull_range, SiT_config.aging_compensation, SiT_config.max_freq_ramp_rate, SiT_config.datetime)
+    # print_settings(settings_file, SiT_config.total_offset_written, SiT_config.pull_range, SiT_config.aging_compensation, SiT_config.max_freq_ramp_rate, SiT_config.datetime)
 
     return_value = 0
 
@@ -676,7 +677,7 @@ def main():
         == False
     ):
 
-        SiT_config.pull_value = siTime.total_offset_written
+        SiT_config.total_offset_written = siTime.total_offset_written
         SiT_config.pull_range = siTime.pull_range
         SiT_config.aging_compensation = siTime.aging_compensation
         SiT_config.max_freq_ramp_rate = siTime.max_freq_ramp_rate
@@ -684,7 +685,7 @@ def main():
         SiT_config.write_file(settings_file, settings_section)
 
         (
-            SiT_config.pull_value,
+            SiT_config.total_offset_written,
             SiT_config.pull_range,
             SiT_config.aging_compensation,
             SiT_config.max_freq_ramp_rate,
@@ -699,10 +700,10 @@ def main():
 
         print()
 
-        if SiT_config.pull_value == siTime.total_offset_written:
-            print("Pull Value            match!")
+        if SiT_config.total_offset_written == siTime.total_offset_written:
+            print("Total Offset Written  match!")
         else:
-            print("Pull Value            MISMATCH!")
+            print("Total Offset Written  MISMATCH!")
             return_value = 1
 
         if SiT_config.pull_range == siTime.pull_range:
