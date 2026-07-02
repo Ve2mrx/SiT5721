@@ -489,10 +489,6 @@ class SiT5721:
             )
         )
 
-    def reset_error(self):
-        bus.write_i2c_block_data(
-            address, 0xE1, list(0x64, 0x01))  # Will it work?
-
     def print_SiT_static(self):
         # self.read_SiT_static()
 
