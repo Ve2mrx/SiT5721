@@ -5,6 +5,7 @@ import datetime
 from zoneinfo import ZoneInfo
 import configparser
 import os
+import sys
 
 bus = smbus.SMBus(0)
 address = 0x60
@@ -21,7 +22,7 @@ new_aging_compensation = 0.000000000  # default 0.000000000
 
 new_max_freq_ramp_rate = 0.000010000  # default 0.000010000 (1.00E-05)
 
-settings_file = "SiT-settings2.ini"
+settings_file = sys.argv[1] if len(sys.argv) > 1 else "SiT-settings2.ini"
 settings_section = "Current"
 
 

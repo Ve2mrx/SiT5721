@@ -8,4 +8,4 @@ if screen -list | grep -qE '\.SiT-save[[:space:]]'; then
 fi
 
 cd "$SCRIPT_DIR"
-screen -d -m -S SiT-save watch -n 600 "$SCRIPT_DIR/save-SiT5721.py"
+screen -d -m -S SiT-save watch -n 600 "$SCRIPT_DIR/save-SiT5721.py" "$SCRIPT_DIR/SiT-settings2.ini"
