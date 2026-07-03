@@ -8,7 +8,13 @@
 # retry a failed send.
 
 MAIL_FAIL_LOG=~/SiT-restart_mail-failures.log
-recipient="virusmsg@ve2mrx.dyndns.info"
+ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
+[ -f "$ALERT_CONFIG" ] && . "$ALERT_CONFIG"
+if [ -z "$ALERT_RECIPIENT" ]; then
+	echo "ALERT_RECIPIENT not set - create $ALERT_CONFIG" >&2
+	exit 1
+fi
+recipient="$ALERT_RECIPIENT"
 subject="⚠ URGENT SiT5721: restart-sit-screen.service failed on $(hostname)"
 body="restart-sit-screen.service failed on $(hostname) at $(date -Is). Check: journalctl -u restart-sit-screen.service"
 
