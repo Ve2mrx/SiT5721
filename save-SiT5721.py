@@ -175,11 +175,6 @@ class SiT5721_settings:
 
         return return_value
 
-    def create_file(self, settings_file):
-
-        with open(settings_file, "w") as configfile:
-            self.config.write(configfile)
-
     def read_file(self, settings_file, settings_section):
         if os.path.exists(settings_file) == True:
             self.config.read(settings_file)
@@ -192,10 +187,6 @@ class SiT5721_settings:
             self.config[settings_section]["datetime"],
             float(self.config[settings_section]["config_ver"]),
         )
-
-        # else:
-        # self.create_file(settings_file)
-        # self.config.read(settings_file)
 
     def write_file(self, settings_file, settings_section):
         self.config[settings_section] = dict()
