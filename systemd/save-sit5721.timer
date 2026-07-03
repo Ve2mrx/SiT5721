@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically save SiT5721 register state
+
+[Timer]
+# Replaces the old `screen -d -m watch -n 600 save-SiT5721.py` kludge -
+# the interval is now a real, single-place systemd parameter instead of
+# being buried in a shell one-liner.
+OnBootSec=60
+OnUnitActiveSec=600
+Unit=save-sit5721.service
+
+[Install]
+WantedBy=timers.target

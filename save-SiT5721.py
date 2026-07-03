@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import configparser
 import os
 import sys
+import tempfile
 
 from mbt_SiT5721_lib import SiT5721
 
@@ -172,10 +173,24 @@ class SiT5721_settings:
             self.max_freq_ramp_rate
         )
 
-        with open(settings_file, "w") as configfile:
-            self.config.write(configfile)
-            configfile.flush()
-            os.fsync(configfile)
+        # Write to a temp file in the same directory, then atomically rename
+        # over the target - a power failure mid-write can't leave a
+        # truncated/corrupt settings file (which restart-SiT5721.py depends
+        # on being intact at boot).
+        settings_dir = os.path.dirname(os.path.abspath(settings_file)) or "."
+        fd, tmp_path = tempfile.mkstemp(
+            dir=settings_dir, prefix=os.path.basename(settings_file) + "."
+        )
+        try:
+            os.chmod(tmp_path, 0o644)
+            with os.fdopen(fd, "w") as configfile:
+                self.config.write(configfile)
+                configfile.flush()
+                os.fsync(configfile.fileno())
+            os.replace(tmp_path, settings_file)
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
 
     def print(self, settings_file, settings_section):
         print("settings_file         ", settings_file)

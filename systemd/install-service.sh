@@ -1,9 +1,12 @@
 #!/bin/sh
-# Installs restart-sit-screen.service (+ its OnFailure= alert unit) as
-# system-wide systemd units and enables the main one, so
-# restart-SiT-screen.sh runs automatically after every reboot - ordered
-# after real network availability (After=network-online.target), with an
-# email alert if it ever fails.
+# Installs the SiT5721 system-wide systemd units and enables them:
+# - restart-sit-screen.service (+ its OnFailure= alert unit): runs
+#   restart-SiT-screen.sh after every reboot - ordered after real network
+#   availability (After=network-online.target), with an email alert if it
+#   ever fails.
+# - save-sit5721.timer (+ save-sit5721.service): periodically saves
+#   register state to SiT-settings2.ini, replacing the old
+#   `screen -d -m watch -n 600 save-SiT5721.py` kludge.
 #
 # Needs root - run with sudo. Also disables/removes the old --user unit
 # this replaces, so it doesn't run a second time at boot.
@@ -18,9 +21,12 @@ UNIT_DIR="/etc/systemd/system"
 
 cp "$SCRIPT_DIR/restart-sit-screen.service" "$UNIT_DIR/restart-sit-screen.service"
 cp "$SCRIPT_DIR/restart-sit-screen-alert.service" "$UNIT_DIR/restart-sit-screen-alert.service"
+cp "$SCRIPT_DIR/save-sit5721.service" "$UNIT_DIR/save-sit5721.service"
+cp "$SCRIPT_DIR/save-sit5721.timer" "$UNIT_DIR/save-sit5721.timer"
 
 systemctl daemon-reload
 systemctl enable restart-sit-screen.service
+systemctl enable --now save-sit5721.timer
 
 OLD_USER_UNIT="/home/ve2mrx/.config/systemd/user/restart-sit-screen.service"
 if [ -f "$OLD_USER_UNIT" ]; then
@@ -37,3 +43,7 @@ echo "Run 'systemctl start restart-sit-screen.service' to test it now,"
 echo "or 'journalctl -u restart-sit-screen.service' to see its output."
 echo "restart-sit-screen-alert.service fires automatically via OnFailure=;"
 echo "it is not enabled/started directly."
+echo
+echo "Installed and started save-sit5721.timer (system unit)."
+echo "Run 'systemctl list-timers save-sit5721.timer' to see next run,"
+echo "or 'journalctl -u save-sit5721.service' to see its output."

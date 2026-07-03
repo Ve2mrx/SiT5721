@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify/start the SiT5721 save-state screen after restart
+Description=Restore aging-corrected SiT5721 Pull Value after restart
 After=network-online.target
 Wants=network-online.target
 OnFailure=restart-sit-screen-alert.service
