@@ -4,6 +4,8 @@ import struct
 import datetime
 from zoneinfo import ZoneInfo
 import configparser
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -12,6 +14,44 @@ from mbt_SiT5721_lib import SiT5721
 
 bus = smbus.SMBus(0)
 address = 0x60
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+STATUS_FILE = os.path.join(SCRIPT_DIR, "SiT-save_status.txt")
+
+
+def atomic_write_text(path, text, mode=0o644):
+    """Write text to path via a same-dir temp file + os.replace(), so a
+    power failure mid-write can't leave a truncated/corrupt file."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".")
+    try:
+        os.chmod(tmp_path, mode)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
+class Tee(io.TextIOBase):
+    """Writes to multiple streams at once - lets main() print to the
+    terminal/journal as usual while also capturing the same text for
+    STATUS_FILE."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
 
 # Note that a float has 7.225 decimal digit precision
 new_pull_value = 0.000000000  # default 0.000000000
@@ -173,24 +213,9 @@ class SiT5721_settings:
             self.max_freq_ramp_rate
         )
 
-        # Write to a temp file in the same directory, then atomically rename
-        # over the target - a power failure mid-write can't leave a
-        # truncated/corrupt settings file (which restart-SiT5721.py depends
-        # on being intact at boot).
-        settings_dir = os.path.dirname(os.path.abspath(settings_file)) or "."
-        fd, tmp_path = tempfile.mkstemp(
-            dir=settings_dir, prefix=os.path.basename(settings_file) + "."
-        )
-        try:
-            os.chmod(tmp_path, 0o644)
-            with os.fdopen(fd, "w") as configfile:
-                self.config.write(configfile)
-                configfile.flush()
-                os.fsync(configfile.fileno())
-            os.replace(tmp_path, settings_file)
-        except BaseException:
-            os.unlink(tmp_path)
-            raise
+        buffer = io.StringIO()
+        self.config.write(buffer)
+        atomic_write_text(settings_file, buffer.getvalue())
 
     def print(self, settings_file, settings_section):
         print("settings_file         ", settings_file)
@@ -311,4 +336,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    capture = io.StringIO()
+    with contextlib.redirect_stdout(Tee(sys.stdout, capture)):
+        main()
+    atomic_write_text(STATUS_FILE, capture.getvalue())
