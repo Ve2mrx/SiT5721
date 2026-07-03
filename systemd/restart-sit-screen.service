@@ -1,11 +1,14 @@
 [Unit]
 Description=Verify/start the SiT5721 save-state screen after restart
-After=default.target
+After=network-online.target
+Wants=network-online.target
+OnFailure=restart-sit-screen-alert.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=%h/project/SiT5721/restart-SiT-screen.sh
+User=ve2mrx
+ExecStart=/home/ve2mrx/project/SiT5721/restart-SiT-screen.sh
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
