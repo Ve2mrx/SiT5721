@@ -14,6 +14,7 @@ SCRIPTS=(
     read-SiT5721.py
     write-SiT5721.py
     save-SiT5721.py
+    restart-SiT5721.py
     write-default_SiT5721.py
 )
 
