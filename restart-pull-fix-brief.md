@@ -83,3 +83,34 @@ Keep the "run a day or two, then recalc from the spreadsheet" step as a safety n
 - On a real restart, read-back Pull/Aging/Range/Ramp match what was written.
 - After a known Δt, the first days' measured frequency error is markedly smaller
   than with the old (uncorrected) restart.
+
+## Update 2026-07-04: register writes gated on power_loss
+
+`restart-SiT5721.py` now runs the four `set_*` register writes **only when the
+chip is at power-on defaults** (`is_at_defaults()` -> `power_loss`). Previously
+the writes were unconditional and ran on every boot via the oneshot systemd unit.
+
+Why: on a warm software reboot (`reboot`, kernel update, watchdog) the CM4
+restarts but the 5V rail is never cut, so the SiT stays powered and keeps its
+Pull/Aging. Rewriting `total + aging*dt` over the live registers would re-fold
+the already-accumulated aging back into the Pull and jump the output offset
+(~`aging * uptime`, order 1-2 ppb after weeks of uptime). Gating avoids that.
+
+Behaviour now:
+- chip **at** defaults (real power loss) -> restore aging-corrected Pull, verify
+  read-back, write the get-data.py mark file. (unchanged)
+- chip **not** at defaults (warm reboot) -> print "calibration survived this
+  restart", write nothing, return EXIT_OK.
+- `--dry-run` unchanged, plus a line noting a real run only writes on a power loss.
+
+Hardware note - why `is_at_defaults` is a reliable power-loss detector here:
+the SiT5721 and the CM4 share one UPS-backed power source, so the SiT can only
+lose power when the CM4 also loses power. "SiT at defaults on boot" therefore
+reliably means a true power loss - there is no partial-power state where one
+reset and the other did not. Shared power does **not** make the gate redundant:
+a warm software reboot restarts the CM4 without cutting the SiT, so the SiT is
+not always at defaults on boot - which is exactly the case the gate protects.
+
+TODO (to-be-fixed): also `cook_f32` the aging/range/ramp read-back comparisons
+(only Pull is cooked today; the others happen to be exact float32 from the ini,
+so they pass, but cooking all four avoids a false MISMATCH if that ever changes).

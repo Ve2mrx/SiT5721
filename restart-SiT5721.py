@@ -133,6 +133,9 @@ def main():
     if args.dry_run:
         print()
         print("Dry run - no I2C write performed.")
+        print("On a real run these are written only if the chip is at "
+              "power-on defaults (a real power loss); if the SiT kept its "
+              "calibration, the live values are left untouched.")
         return EXIT_OK
 
     bus = smbus.SMBus(0)
@@ -144,6 +147,26 @@ def main():
     # this restart, not the values we're about to write.
     power_loss = is_at_defaults(siTime)
 
+    if not power_loss:
+        # Registers are not at power-on defaults, so the chip kept its
+        # calibration across this restart (e.g. an OS reboot with the SiT
+        # staying powered). Its Pull/Aging are still live and correct;
+        # rewriting them would re-fold the already-accumulated aging back
+        # into the Pull and jump the output offset. Leave the running chip
+        # untouched - the aging-corrected restart only applies after a real
+        # power loss (chip reset to defaults).
+        print()
+        print("Registers are not at power-on defaults: calibration survived "
+              "this restart (no power loss). Leaving the live values in "
+              "place - no write performed.")
+        print(f"Live Pull Value         {siTime.pull_value:=+.8g}")
+        print(f"Live Aging compensation {siTime.aging_compensation:=+.8g} part/s")
+        return EXIT_OK
+
+    print()
+    print("Power loss detected (registers at defaults): restoring the "
+          "aging-corrected Pull Value.")
+
     siTime.set_pull_value(new_pull)
     siTime.set_aging_comp(aging)
     siTime.set_pull_range(prange)
@@ -151,6 +174,9 @@ def main():
 
     siTime.read_SiT_config()
 
+    # TODO (to-be-fixed): cook_f32() the aging/prange/ramp expected values below
+    # too, so a hand-edited non-float32 settings value can't trigger a false
+    # MISMATCH (exit 1 -> alert email). See restart-pull-fix-brief.md.
     checks = (
         ("Pull Value", cook_f32(new_pull), siTime.pull_value),
         ("Aging compensation", aging, siTime.aging_compensation),
@@ -167,10 +193,9 @@ def main():
             print(f"{label:<24}MISMATCH! (wrote {expected!r}, read back {actual!r})")
             return_value = EXIT_MISMATCH
 
-    if power_loss and return_value == EXIT_OK:
+    if return_value == EXIT_OK:
         print()
-        print("Power loss detected (registers were at defaults) - "
-              "recalculated and reloaded values verified. Leaving a mark "
+        print("Recalculated and reloaded values verified. Leaving a mark "
               f"for get-data.py at {POWER_LOSS_MARK_FILE}")
         mark = {
             "detected_at": now.isoformat(),
