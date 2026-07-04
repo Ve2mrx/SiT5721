@@ -49,14 +49,18 @@ either git repo):
 ```sh
 mkdir -p ~/.config
 cat > ~/.config/sit-alerts.conf <<'EOF'
-ALERT_RECIPIENT="you@example.com"
+ALERT_RECIPIENT="root"
 EOF
 ```
 
 `systemd/restart-sit5721-pull-alert.sh` sources this file and refuses to
 send (fails loud in the log, not silently) if `ALERT_RECIPIENT` is unset.
-The recipient **must** be a real, directly-deliverable address — `msmtp`
-does not consult `/etc/aliases`.
+As of 2026-07-04, `/etc/msmtprc` has an `aliases /etc/aliases` directive
+(see mbt-ubx-apps' project memory `alert-config-vs-aliases-todo`), so
+`msmtp` now resolves `root`/`ve2mrx`/etc. to their `/etc/aliases`
+targets - `ALERT_RECIPIENT` can be a bare local alias like `root`, not
+just a literal address. On a host without that directive configured, it
+must be a real, directly-deliverable address instead.
 
 Emails sent by this project:
 - **Urgent** (`Importance: high`): `restart-sit5721-pull.service` failed
