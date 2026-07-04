@@ -2,13 +2,13 @@
 Description=Restore aging-corrected SiT5721 Pull Value after restart
 After=network-online.target
 Wants=network-online.target
-OnFailure=restart-sit-screen-alert.service
+OnFailure=restart-sit5721-pull-alert.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 User=ve2mrx
-ExecStart=/home/ve2mrx/project/SiT5721/restart-SiT-screen.sh
+ExecStart=/home/ve2mrx/project/SiT5721/restart-SiT5721-pull.sh
 
 [Install]
 WantedBy=multi-user.target

@@ -51,17 +51,19 @@ ALERT_RECIPIENT="you@example.com"
 EOF
 ```
 
-`systemd/restart-sit-screen-alert.sh` sources this file and refuses to
+`systemd/restart-sit5721-pull-alert.sh` sources this file and refuses to
 send (fails loud in the log, not silently) if `ALERT_RECIPIENT` is unset.
 The recipient **must** be a real, directly-deliverable address — `msmtp`
 does not consult `/etc/aliases`.
 
 Emails sent by this project:
-- **Urgent** (`Importance: high`): `restart-sit-screen.service` failed
+- **Urgent** (`Importance: high`): `restart-sit5721-pull.service` failed
   outright (`OnFailure=`).
 
 There is currently no normal-priority confirmation email on this side
-(mbt-ubx-apps has one for its own reboot/TOW-resume path).
+(mbt-ubx-apps has one for its own reboot/TOW-resume path, and now also
+one for a detected-and-recalculated power loss - see that project's
+manual).
 
 ## 3. systemd services (boot-time automation)
 
@@ -71,12 +73,17 @@ sudo ./install-service.sh
 ```
 
 Installs and enables:
-- `restart-sit-screen.service` — runs `restart-SiT-screen.sh` once after
-  every boot, ordered after `network-online.target`: restores an
-  aging-corrected Pull Value (`restart-SiT5721.py`), then verifies/starts
-  the `SiT-save` screen if it isn't already running.
-- `restart-sit-screen-alert.service` — fires automatically via
-  `restart-sit-screen.service`'s `OnFailure=`; not started directly.
+- `restart-sit5721-pull.service` — runs `restart-SiT5721-pull.sh` once
+  after every boot, ordered after `network-online.target`: restores an
+  aging-corrected Pull Value (`restart-SiT5721.py`). (Renamed 2026-07-04
+  from `restart-sit-screen.service` — it hasn't managed any screen since
+  the `SiT-save` screen→timer conversion; today it only restores Pull.)
+  mbt-ubx-apps' `restart-calib.service` runs `After=` this one, so a real
+  power-loss recalc (if any) is already applied and marked before that
+  side checks anything - see that project's manual for the mark/archive
+  behavior this enables.
+- `restart-sit5721-pull-alert.service` — fires automatically via
+  `restart-sit5721-pull.service`'s `OnFailure=`; not started directly.
 - `save-sit5721.timer` + `save-sit5721.service` — periodically (every 10
   minutes, `OnUnitActiveSec=600` in `save-sit5721.timer`) runs
   `save-SiT5721.py` to persist register state to `SiT-settings2.ini`.
@@ -89,9 +96,10 @@ Installs and enables:
   `journalctl -u save-sit5721.service`
 - **Check the last save without journalctl**: `cat SiT-save_status.txt`
   (mirrors `save-SiT5721.py`'s terminal output, written atomically each run)
-- **Check boot-time restore logs**: `journalctl -u restart-sit-screen.service`
+- **Check boot-time restore logs**: `journalctl -u restart-sit5721-pull.service`
 - **Dry-run the restart Pull calculation** (no I2C write):
-  `./restart-SiT5721.py --dry-run`
+  `./restart-SiT5721.py --dry-run` (dry-run never writes the power-loss
+  mark file below, even if registers are currently at defaults)
 - **Manual recalibration** (after a few days of fresh capture data from
   mbt-ubx-apps, per the normal drift-correction workflow): edit
   `write-SiT5721.py`'s hardcoded `new_pull_value`/`target_pull_value`/
@@ -100,6 +108,21 @@ Installs and enables:
 - **Mail failures**: check `~/SiT-restart_mail-failures.log` if an
   expected alert never arrived.
 
+## Power-loss detection and marking
+
+`restart-SiT5721.py` checks the chip's registers (already read by
+`SiT5721.__init__()`) *before* writing the recalculated Pull Value. If
+they're still at hardware power-on defaults, this restart follows a real
+power loss (not just an OS reboot with the chip staying powered). Once
+the recalculated values are written and read back verified, it leaves
+`~/SiT-power-loss-mark.json` (timestamp, Δt, aging, old total, new Pull)
+for mbt-ubx-apps' `restart-calib.sh` to pick up: that script archives the
+prior `SiT-calib_output.txt`/`parsed_records.json`/`.csv` and starts a
+fresh calibration epoch, then emails a normal-priority notice. See that
+project's manual for the consuming side. Nothing here needs to change if
+that hand-off's file format ever changes shape — this side only ever
+writes it, never reads it back.
+
 ## Key files/paths
 
 | Path | Purpose |
@@ -107,7 +130,8 @@ Installs and enables:
 | `SiT-settings2.ini` | Persisted register state (`[Current]` section), read by `restart-SiT5721.py` on boot |
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
-| `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit-screen-alert.sh`'s mail sends |
+| `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
+| `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
 | `~/.config/sit-alerts.conf` | Shared alert recipient config (see above) |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
 

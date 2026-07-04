@@ -10,6 +10,7 @@
 import argparse
 import configparser
 import datetime
+import json
 import os
 import struct
 import sys
@@ -34,6 +35,31 @@ SETTINGS_SECTION = "Current"
 
 EPOCH_UTC = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
 MAX_SANE_DELTA_T = datetime.timedelta(days=3650).total_seconds()
+
+# Mirrors check-SiT5721-defaults.py's DEFAULTS/TOLERANCE (mbt-ubx-apps repo) -
+# keep the two in sync if the datasheet defaults ever change.
+POWER_ON_DEFAULTS = {
+    "pull_value": 0.0,
+    "pull_range": 1e-05,
+    "aging_compensation": 0.0,
+    "max_freq_ramp_rate": 1e-05,
+}
+DEFAULTS_TOLERANCE = 1e-9
+
+# Shared with mbt-ubx-apps' get-data.py, which folds this into
+# SiT-calib_output.txt and renames it aside once consumed - see
+# project memory power-loss-mark-todo.
+POWER_LOSS_MARK_FILE = os.path.expanduser("~/SiT-power-loss-mark.json")
+
+
+def is_at_defaults(siTime):
+    """True if siTime's config registers are still at hardware power-on
+    defaults, i.e. this restart follows a real power loss (chip reset),
+    not just an OS reboot with the chip staying powered."""
+    return all(
+        abs(getattr(siTime, field) - value) < DEFAULTS_TOLERANCE
+        for field, value in POWER_ON_DEFAULTS.items()
+    )
 
 
 def cook_f32(value):
@@ -113,6 +139,11 @@ def main():
     address = 0x60
     siTime = SiT5721(bus, address)
 
+    # Captured before any writes below - SiT5721.__init__() already read
+    # the current registers, so this reflects the chip's state going into
+    # this restart, not the values we're about to write.
+    power_loss = is_at_defaults(siTime)
+
     siTime.set_pull_value(new_pull)
     siTime.set_aging_comp(aging)
     siTime.set_pull_range(prange)
@@ -135,6 +166,26 @@ def main():
         else:
             print(f"{label:<24}MISMATCH! (wrote {expected!r}, read back {actual!r})")
             return_value = EXIT_MISMATCH
+
+    if power_loss and return_value == EXIT_OK:
+        print()
+        print("Power loss detected (registers were at defaults) - "
+              "recalculated and reloaded values verified. Leaving a mark "
+              f"for get-data.py at {POWER_LOSS_MARK_FILE}")
+        mark = {
+            "detected_at": now.isoformat(),
+            "settings_file": args.settings_file,
+            "saved_datetime": saved_dt.isoformat(),
+            "delta_t_seconds": delta_t,
+            "aging_compensation": aging,
+            "total_offset_written": total,
+            "restart_pull_value": new_pull,
+        }
+        try:
+            with open(POWER_LOSS_MARK_FILE, "w") as f:
+                json.dump(mark, f, indent=2)
+        except OSError as e:
+            print(f"WARNING: failed to write {POWER_LOSS_MARK_FILE}: {e!r}", file=sys.stderr)
 
     return return_value
 

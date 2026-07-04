@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fired by systemd via restart-sit-screen.service's OnFailure=. Sends an
+# Fired by systemd via restart-sit5721-pull.service's OnFailure=. Sends an
 # alert email so a failed restart isn't only visible via journalctl.
 #
 # Calls msmtp directly rather than `mail`/bsd-mailx: bsd-mailx always exits 0
@@ -15,8 +15,8 @@ if [ -z "$ALERT_RECIPIENT" ]; then
 	exit 1
 fi
 recipient="$ALERT_RECIPIENT"
-subject="⚠ URGENT SiT5721: restart-sit-screen.service failed on $(hostname)"
-body="restart-sit-screen.service failed on $(hostname) at $(date -Is). Check: journalctl -u restart-sit-screen.service"
+subject="⚠ URGENT SiT5721: restart-sit5721-pull.service failed on $(hostname)"
+body="restart-sit5721-pull.service failed on $(hostname) at $(date -Is). Check: journalctl -u restart-sit5721-pull.service"
 
 attempt=0
 delay=5

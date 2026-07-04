@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/bin"
 
 SCRIPTS=(
-    restart-SiT-screen.sh
+    restart-SiT5721-pull.sh
     read-SiT5721.py
     write-SiT5721.py
     save-SiT5721.py
