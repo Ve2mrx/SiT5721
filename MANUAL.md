@@ -8,7 +8,9 @@ aging-corrected Pull Value automatically after a reboot.
 Companion project: [mbt-ubx-apps](../ubx-data/mbt-ubx-apps/) (the GNSS
 capture side that reads this same chip to measure calibration drift).
 Shared alert email config is documented in both manuals identically — see
-[Alert email configuration](#alert-email-configuration).
+[Alert email configuration](#alert-email-configuration). See also
+[capture-status](../ubx-data/capture-status/) for a one-shot Go/No-go
+health check spanning both projects.
 
 **Keep this file up to date** whenever install steps, file paths, or the
 systemd/email setup change.
