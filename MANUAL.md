@@ -28,9 +28,16 @@ against the system Python3 with `python3-smbus` installed system-wide.
 ## 1. Install
 
 ```sh
+git clone --recurse-submodules <SiT5721-url> SiT5721
 cd SiT5721
 ./install.sh          # symlinks this repo's scripts into ~/bin
 ```
+
+`read-SiT5721.py`, `restart-SiT5721.py` and `save-SiT5721.py` import the
+SiT5721 I2C library from `lib/mbt-SiT5721-lib`, a git submodule shared
+with mbt-ubx-apps (single source of truth — see that submodule's own
+README). If you cloned without `--recurse-submodules`, run
+`git submodule update --init` before running any of them.
 
 ## 2. Alert email configuration
 
@@ -102,6 +109,7 @@ Installs and enables:
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit-screen-alert.sh`'s mail sends |
 | `~/.config/sit-alerts.conf` | Shared alert recipient config (see above) |
+| `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
 
 ## Known limitations (see project TODOs for detail)
 
