@@ -16,6 +16,9 @@ import sys
 
 import smbus
 
+# mbt_SiT5721_lib lives in the lib/mbt-SiT5721-lib submodule, shared with mbt-ubx-apps
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "mbt-SiT5721-lib"))
+
 from mbt_SiT5721_lib import SiT5721
 
 # Exit codes: 0 success, 1 I2C write/readback mismatch (real failure),
