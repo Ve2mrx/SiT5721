@@ -43,24 +43,16 @@ README). If you cloned without `--recurse-submodules`, run
 
 ## 2. Alert email configuration
 
-Shared with mbt-ubx-apps. Create (once, host-wide, **not** tracked by
-either git repo):
-
-```sh
-mkdir -p ~/.config
-cat > ~/.config/sit-alerts.conf <<'EOF'
-ALERT_RECIPIENT="root"
-EOF
-```
-
-`systemd/restart-sit5721-pull-alert.sh` sources this file and refuses to
-send (fails loud in the log, not silently) if `ALERT_RECIPIENT` is unset.
-As of 2026-07-04, `/etc/msmtprc` has an `aliases /etc/aliases` directive
-(see mbt-ubx-apps' project memory `alert-config-vs-aliases-todo`), so
-`msmtp` now resolves `root`/`ve2mrx`/etc. to their `/etc/aliases`
-targets - `ALERT_RECIPIENT` can be a bare local alias like `root`, not
-just a literal address. On a host without that directive configured, it
-must be a real, directly-deliverable address instead.
+`systemd/restart-sit5721-pull-alert.sh` defaults `ALERT_RECIPIENT` to
+`root` and relies on `/etc/msmtprc`'s `aliases /etc/aliases` directive
+(added 2026-07-04, see mbt-ubx-apps' project memory
+`alert-config-vs-aliases-todo`) to resolve that to a real deliverable
+address - no per-host config file needed anymore (retired
+`~/.config/sit-alerts.conf`, shared with mbt-ubx-apps, the same day).
+On a host without that directive configured, `msmtp` does not consult
+`/etc/aliases` on its own, so `root` would fail - either add the
+directive there too, or override the default:
+`ALERT_RECIPIENT="you@example.com" ./restart-sit5721-pull-alert.sh`.
 
 Emails sent by this project:
 - **Urgent** (`Importance: high`): `restart-sit5721-pull.service` failed
@@ -138,7 +130,6 @@ writes it, never reads it back.
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
-| `~/.config/sit-alerts.conf` | Shared alert recipient config (see above) |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
 
 ## Known limitations (see project TODOs for detail)

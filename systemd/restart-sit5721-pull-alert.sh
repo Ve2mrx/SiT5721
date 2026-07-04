@@ -8,13 +8,10 @@
 # retry a failed send.
 
 MAIL_FAIL_LOG=~/SiT-restart_mail-failures.log
-ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
-[ -f "$ALERT_CONFIG" ] && . "$ALERT_CONFIG"
-if [ -z "$ALERT_RECIPIENT" ]; then
-	echo "ALERT_RECIPIENT not set - create $ALERT_CONFIG" >&2
-	exit 1
-fi
-recipient="$ALERT_RECIPIENT"
+# Relies on msmtp's own `aliases /etc/aliases` directive in /etc/msmtprc
+# (root -> real address) - see project memory alert-config-vs-aliases-todo.
+# Overridable via env var for testing without sending a real alert.
+recipient="${ALERT_RECIPIENT:-root}"
 subject="⚠ URGENT SiT5721: restart-sit5721-pull.service failed on $(hostname)"
 body="restart-sit5721-pull.service failed on $(hostname) at $(date -Is). Check: journalctl -u restart-sit5721-pull.service"
 
