@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Installs the SiT5721 system-wide systemd units and enables them:
 # - restart-sit5721-pull.service (+ its OnFailure= alert unit): runs
 #   restart-SiT5721-pull.sh after every reboot - ordered after real network
