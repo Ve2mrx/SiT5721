@@ -41,6 +41,13 @@ with mbt-ubx-apps (single source of truth — see that submodule's own
 README). If you cloned without `--recurse-submodules`, run
 `git submodule update --init` before running any of them.
 
+For provisioning a whole fresh device (OS reinstall/SD-card swap) rather
+than just this repo, see
+[../ubx-data/reinstall.sh](../ubx-data/reinstall.sh) — it drives the
+steps above plus the mbt-ubx-apps/capture-status repos, OS packages,
+I2C/serial checks, and systemd units in one idempotent, re-runnable
+pass.
+
 ## 2. Alert email configuration
 
 `systemd/restart-sit5721-pull-alert.sh` defaults `ALERT_RECIPIENT` to
@@ -125,12 +132,13 @@ writes it, never reads it back.
 
 | Path | Purpose |
 |---|---|
-| `SiT-settings2.ini` | Persisted register state (`[Current]` section), read by `restart-SiT5721.py` on boot |
+| `SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once) |
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
+| `../ubx-data/reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
 
 ## Known limitations (see project TODOs for detail)
 
