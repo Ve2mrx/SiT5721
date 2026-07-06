@@ -132,7 +132,7 @@ writes it, never reads it back.
 
 | Path | Purpose |
 |---|---|
-| `SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once) |
+| `SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once). Also read-only pushed to the NAS by mbt-ubx-apps' `../ubx-data/nas-sync/` (one-way, never written back) - see that project's manual |
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
