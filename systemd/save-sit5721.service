@@ -4,4 +4,4 @@ Description=Save SiT5721 register state to SiT-settings2.ini
 [Service]
 Type=oneshot
 User=ve2mrx
-ExecStart=/home/ve2mrx/project/SiT5721/save-SiT5721.py /home/ve2mrx/project/SiT5721/SiT-settings2.ini
+ExecStart=/home/ve2mrx/project/SiT5721/save-SiT5721.py /home/ve2mrx/SiT-settings2.ini

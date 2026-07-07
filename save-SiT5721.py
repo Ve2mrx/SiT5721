@@ -68,7 +68,7 @@ new_aging_compensation = 0.000000000  # default 0.000000000
 
 new_max_freq_ramp_rate = 0.000010000  # default 0.000010000 (1.00E-05)
 
-settings_file = sys.argv[1] if len(sys.argv) > 1 else "SiT-settings2.ini"
+settings_file = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.expanduser("~"), "SiT-settings2.ini")
 settings_section = "Current"
 
 

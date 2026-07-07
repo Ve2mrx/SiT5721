@@ -30,7 +30,7 @@ EXIT_MISMATCH = 1
 EXIT_REFUSED = 2
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_SETTINGS_FILE = os.path.join(SCRIPT_DIR, "SiT-settings2.ini")
+DEFAULT_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), "SiT-settings2.ini")
 SETTINGS_SECTION = "Current"
 
 EPOCH_UTC = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
