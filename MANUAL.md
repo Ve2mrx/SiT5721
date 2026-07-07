@@ -17,7 +17,14 @@ systemd/email setup change.
 
 ## Hardware & OS prerequisites
 
-- SiT5721 GPSDO on I2C bus 0, address `0x60`
+- SiT5721 GPSDO on I2C bus 0, address `0x60` — needs the `i2c-dev` kernel
+  module loaded (creates `/dev/i2c-0`) and persisted across reboots via
+  `sudo raspi-config` → Interface Options → I2C → Enable (that's the step
+  that actually persists `i2c-dev`, not just the `dtparam=i2c_arm=on` it
+  also sets). Easy to miss on a fresh image if the I2C buses were instead
+  hand-added to `config.txt`, as on this hardware
+  (`i2c_vc`/`i2c5`/`i2c_csi_dsi`) — see mbt-ubx-apps' manual for the
+  2026-07-06/07 incident this caused there.
 - OS packages: `python3-smbus`, `screen`, `msmtp`, `msmtp-mta`
   (`apt install python3-smbus screen msmtp msmtp-mta`)
 - `/etc/msmtprc` configured with a working SMTP account (shared with
@@ -91,9 +98,11 @@ Installs and enables:
   `restart-sit5721-pull.service`'s `OnFailure=`; not started directly.
 - `save-sit5721.timer` + `save-sit5721.service` — periodically (every 10
   minutes, `OnUnitActiveSec=600` in `save-sit5721.timer`) runs
-  `save-SiT5721.py` to persist register state to `SiT-settings2.ini`.
-  Replaces an older `screen`+`watch` mechanism (retired 2026-07-03) — the
-  interval is now a normal systemd parameter, not a shell one-liner.
+  `save-SiT5721.py` to persist register state to `~/SiT-settings2.ini`
+  (relocated 2026-07-07 from `SiT-settings2.ini` inside this repo to
+  `$HOME` — see [Key files/paths](#key-filespaths)). Replaces an older
+  `screen`+`watch` mechanism (retired 2026-07-03) — the interval is now a
+  normal systemd parameter, not a shell one-liner.
 
 ## Operations
 
@@ -132,13 +141,29 @@ writes it, never reads it back.
 
 | Path | Purpose |
 |---|---|
-| `SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once). Also read-only pushed to the NAS by mbt-ubx-apps' `../ubx-data/nas-sync/` (one-way, never written back) - see that project's manual |
+| `~/SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Relocated 2026-07-07 from `SiT-settings2.ini` inside this repo to `$HOME` (`restart-SiT5721.py`'s `DEFAULT_SETTINGS_FILE`, `save-SiT5721.py`'s default, and `systemd/save-sit5721.service`'s `ExecStart` arg all updated together, commit `775e78a`) - has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once). Also read-only pushed to the NAS by mbt-ubx-apps' `../ubx-data/nas-sync/` (one-way, never written back) - see that project's manual |
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
 | `../ubx-data/reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
+
+## Known issues / troubleshooting log
+
+**2026-07-06/07 — `restart-SiT5721-pull.sh`'s `SCRIPT_DIR` broke when
+invoked via its `~/bin/` symlink.** It derived its own directory with
+`dirname -- "$0"`, which doesn't resolve symlinks — running
+`~/bin/restart-SiT5721-pull.sh` directly made `SCRIPT_DIR` resolve to
+`~/bin` instead of this repo, so `"$SCRIPT_DIR/restart-SiT5721.py"`
+happened to still work only because `~/bin/restart-SiT5721.py` is
+*also* a symlink to the same file — coincidental, not by design.
+`restart-sit5721-pull.service` was never exposed to this (its
+`ExecStart=` uses the real absolute path). Fixed by resolving `$0`
+through `readlink -f` before taking `dirname` of it (commit `67c225f`).
+Same fix applied the same session to mbt-ubx-apps' `start-get-data.sh`
+(which *did* break in practice there — see that project's manual),
+`set-calib-screen.sh`, and `restart-calib.sh`.
 
 ## Known limitations (see project TODOs for detail)
 
