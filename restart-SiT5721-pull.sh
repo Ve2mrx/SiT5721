@@ -3,7 +3,7 @@
 # See restart-pull-fix-brief.md. Periodic saving to SiT-settings2.ini is
 # handled separately by systemd/save-sit5721.timer, not by this script.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
 
 "$SCRIPT_DIR/restart-SiT5721.py"
 restart_pull_status=$?
