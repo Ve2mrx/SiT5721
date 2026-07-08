@@ -79,11 +79,18 @@ def read_settings(settings_file, section=SETTINGS_SECTION):
     config = configparser.ConfigParser()
     config.read(settings_file)
 
+    # Cooked through float32 here, at the point these untrusted ini-file
+    # values enter the program - the SiT5721's registers are float32, so
+    # this is their true precision regardless of what the ini file's text
+    # representation implies. Keeping every downstream use (writes,
+    # prints, comparisons) already float32-clean avoids relying on each
+    # call site to remember to cook_f32() before comparing against a
+    # readback. config_ver/datetime aren't register values, left as-is.
     return (
-        float(config[section]["total_offset_written"]),
-        float(config[section]["pull_range"]),
-        float(config[section]["aging_compensation"]),
-        float(config[section]["max_freq_ramp_rate"]),
+        cook_f32(float(config[section]["total_offset_written"])),
+        cook_f32(float(config[section]["pull_range"])),
+        cook_f32(float(config[section]["aging_compensation"])),
+        cook_f32(float(config[section]["max_freq_ramp_rate"])),
         config[section]["datetime"],
         float(config[section]["config_ver"]),
     )
@@ -174,11 +181,14 @@ def main():
 
     siTime.read_SiT_config()
 
+    # aging/prange/ramp are already float32-clean from read_settings() -
+    # only new_pull needs cook_f32() here, since it's freshly computed
+    # (total + aging * delta_t) rather than a direct passthrough read.
     checks = (
         ("Pull Value", cook_f32(new_pull), siTime.pull_value),
-        ("Aging compensation", cook_f32(aging), siTime.aging_compensation),
-        ("Pull Range", cook_f32(prange), siTime.pull_range),
-        ("Max. Freq Ramp Rate", cook_f32(ramp), siTime.max_freq_ramp_rate),
+        ("Aging compensation", aging, siTime.aging_compensation),
+        ("Pull Range", prange, siTime.pull_range),
+        ("Max. Freq Ramp Rate", ramp, siTime.max_freq_ramp_rate),
     )
 
     print()
