@@ -151,6 +151,28 @@ writes it, never reads it back.
 
 ## Known issues / troubleshooting log
 
+**2026-07-08 — `cook_f32()` now applied at settings-file read time, not
+just at comparison time.** Follow-up to the fix below: applying
+`cook_f32()` only inside the `checks` tuple worked, but meant every future
+call site using `total`/`prange`/`aging`/`ramp` would have to separately
+remember to cook them before comparing against a chip readback - the same
+gap that let 3 of 4 fields go uncooked for a while. `read_settings()` now
+cooks all four numeric fields through float32 right where they're parsed
+from the ini file, since that's their true precision regardless of the
+file's text representation (the SiT5721's registers are float32). Only
+`new_pull` still needs `cook_f32()` at comparison time, since it's freshly
+computed (`total + aging * delta_t`) rather than a direct passthrough
+read. Commit `0f664cc`.
+
+**2026-07-08 — `cook_f32()` fixed for the Aging/Pull Range/Max Freq Ramp
+Rate readback checks, not just Pull Value.** The `checks` tuple only
+rounded the Pull Value's expected value through `cook_f32()` before
+comparing against the chip's readback; the other three fields compared
+raw ini-file floats directly, which could in theory false-MISMATCH (->
+alert email) against a hand-edited, non-float32-clean settings value.
+Didn't affect the real 2026-07-06/07 power-loss event below, since those
+values happened to round-trip cleanly already. Commit `a64c9db`.
+
 **2026-07-06/07 — real power-loss recalc verified live, for real, by the
 Trixie OS switch.** The CM4 reflash/reboot genuinely power-cycled the
 SiT5721 (it's evidently not on an independent power rail from the CM4),
