@@ -184,13 +184,6 @@ Same fix applied the same session to mbt-ubx-apps' `start-get-data.sh`
 
 ## Known limitations (see project TODOs for detail)
 
-- `restart-SiT5721.py`'s `cook_f32()` rounding is only applied to the
-  Pull Value check, not the Aging/Pull Range/Max Freq Ramp Rate readback
-  comparisons (see the `TODO` at `restart-SiT5721.py:177`) — a
-  hand-edited, non-float32-clean `SiT-settings2.ini` value could in
-  theory trigger a false MISMATCH/alert. Low priority: didn't affect the
-  real 2026-07-06/07 power-loss event above, since those values already
-  round-tripped cleanly.
 - The aging-corrected restart Pull fix has no automated regression test;
   changes here should be re-verified with `--dry-run` against the live
   `SiT-settings2.ini` before trusting a real write.

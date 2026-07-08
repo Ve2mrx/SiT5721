@@ -174,14 +174,11 @@ def main():
 
     siTime.read_SiT_config()
 
-    # TODO (to-be-fixed): cook_f32() the aging/prange/ramp expected values below
-    # too, so a hand-edited non-float32 settings value can't trigger a false
-    # MISMATCH (exit 1 -> alert email). See restart-pull-fix-brief.md.
     checks = (
         ("Pull Value", cook_f32(new_pull), siTime.pull_value),
-        ("Aging compensation", aging, siTime.aging_compensation),
-        ("Pull Range", prange, siTime.pull_range),
-        ("Max. Freq Ramp Rate", ramp, siTime.max_freq_ramp_rate),
+        ("Aging compensation", cook_f32(aging), siTime.aging_compensation),
+        ("Pull Range", cook_f32(prange), siTime.pull_range),
+        ("Max. Freq Ramp Rate", cook_f32(ramp), siTime.max_freq_ramp_rate),
     )
 
     print()

@@ -111,6 +111,6 @@ reset and the other did not. Shared power does **not** make the gate redundant:
 a warm software reboot restarts the CM4 without cutting the SiT, so the SiT is
 not always at defaults on boot - which is exactly the case the gate protects.
 
-TODO (to-be-fixed): also `cook_f32` the aging/range/ramp read-back comparisons
-(only Pull is cooked today; the others happen to be exact float32 from the ini,
-so they pass, but cooking all four avoids a false MISMATCH if that ever changes).
+Fixed 2026-07-08: `cook_f32` is now applied to all four read-back comparisons
+(Pull, aging, range, ramp), not just Pull - avoids a false MISMATCH if a
+hand-edited settings value is ever not already exact float32.
