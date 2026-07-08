@@ -151,6 +151,23 @@ writes it, never reads it back.
 
 ## Known issues / troubleshooting log
 
+**2026-07-06/07 — real power-loss recalc verified live, for real, by the
+Trixie OS switch.** The CM4 reflash/reboot genuinely power-cycled the
+SiT5721 (it's evidently not on an independent power rail from the CM4),
+so `restart-sit5721-pull.service`'s boot-time run
+(2026-07-06 22:10:06 EDT) hit the real `is_at_defaults()` → write →
+readback-verify path in `restart-SiT5721.py` for the first time, not just
+in dry-run. Confirmed correct via an independent readback well after the
+write: `get-data.py`'s later capture (`~/SiT-calib_output.txt`) shows the
+live chip reporting `SiT Pull Value +0.1173464 ppm`, an exact match to the
+`restart_pull_value` computed and written at boot (see the archived
+`~/SiT-calib_archive/SiT-power-loss-mark_2026-07-07T021006.json`). The
+mbt-ubx-apps side of the hand-off (archive-and-restart) also worked
+end-to-end — see that project's manual. One real gap this exposed: the
+confirmation email from that event failed to send, because it was the
+very first boot after the reflash and `/etc/msmtprc` hadn't been
+redeployed yet (not a logic bug) — since fixed, see `~/TRIXIE-MIGRATION.md`.
+
 **2026-07-06/07 — `restart-SiT5721-pull.sh`'s `SCRIPT_DIR` broke when
 invoked via its `~/bin/` symlink.** It derived its own directory with
 `dirname -- "$0"`, which doesn't resolve symlinks — running
@@ -167,9 +184,13 @@ Same fix applied the same session to mbt-ubx-apps' `start-get-data.sh`
 
 ## Known limitations (see project TODOs for detail)
 
-- `restart-SiT5721.py`'s real I2C write path hasn't been exercised
-  against an actual post-reset chip yet (only dry-run verified) — the
-  first real reset will be its first real test.
+- `restart-SiT5721.py`'s `cook_f32()` rounding is only applied to the
+  Pull Value check, not the Aging/Pull Range/Max Freq Ramp Rate readback
+  comparisons (see the `TODO` at `restart-SiT5721.py:177`) — a
+  hand-edited, non-float32-clean `SiT-settings2.ini` value could in
+  theory trigger a false MISMATCH/alert. Low priority: didn't affect the
+  real 2026-07-06/07 power-loss event above, since those values already
+  round-tripped cleanly.
 - The aging-corrected restart Pull fix has no automated regression test;
   changes here should be re-verified with `--dry-run` against the live
   `SiT-settings2.ini` before trusting a real write.
