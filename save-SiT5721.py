@@ -9,6 +9,7 @@ import io
 import json
 import os
 import statistics
+import subprocess
 import sys
 import tempfile
 
@@ -228,19 +229,66 @@ class SiT5721_settings:
         print("Max. Freq Ramp Rate   ", self.max_freq_ramp_rate)
 
 
+def cm4_soc_temp_c():
+    """
+    CM4 SoC temperature in degrees C, via `vcgencmd measure_temp` (the
+    Raspberry Pi-supported interface - not a raw sysfs read, which isn't
+    guaranteed to be the same thermal zone index across kernels/models),
+    or None if unavailable.
+
+    Logged alongside the SiT5721 registers as a diurnal proxy for
+    enclosure-interior temperature - the LEA-M8F (mbt-ubx-apps) is not
+    temperature-compensated the way the SiT5721 is, so this is relevant to
+    phase-measurement noise. mbt-ubx-apps' get-data.py already reads this
+    once/day into the main capture via its own copy of this function (small
+    enough, and these are independent repos, to duplicate rather than share -
+    same call as this file's own atomic_write_text()). Best-effort: never
+    raises, so a missing/misbehaving vcgencmd can't affect the register-save
+    this rides along with.
+
+    :return float | None: SoC temperature in C, or None if unavailable
+    """
+
+    try:
+        out = subprocess.run(
+            ["vcgencmd", "measure_temp"],
+            capture_output=True, text=True, timeout=2, check=True,
+        ).stdout.strip()
+        if not out.startswith("temp="):
+            return None
+        return float(out[len("temp="):].split("'")[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 # Bump when the HEALTH,<version>,... line's field list changes, and give
-# any reader (e.g. a future Step-3 sliding-window computation) an explicit
+# any reader (e.g. the sliding-window computation below) an explicit
 # per-version field list to dispatch on - same convention as mbt-ubx-apps'
 # CSV_LINE_VERSION/CSV_LINE_FIELDS_V<N> in parse_sit.py, adopted here before
 # ~/sit-health.csv had more than one unversioned row in production.
-HEALTH_LINE_VERSION = 1
+HEALTH_LINE_VERSION = 2
 
 # Field order for a HEALTH,1,... line, timestamp excluded (handled
-# separately in _parse_health_line) - must match main()'s fh.write() above.
+# separately in _parse_health_line) - must match main()'s fh.write() below.
 HEALTH_CSV_FIELDS_V1 = [
     "resonator_temp_c", "temp_error_c", "heater_power_w",
     "heater_power_target_w", "supply_v",
 ]
+
+# v2 (2026-08-01) = v1 + CM4 SoC temp - fixes a gap against
+# claude-code-health-logging-patch.md's own cooked-stats field list, which
+# named cm4_soc_temp_c as one of the trailing-24h metrics despite this file
+# never having read it (only get-data.py did, once/day, into the main
+# capture). Append-only, same convention as CSV_LINE_FIELDS_V2 in
+# mbt-ubx-apps' parse_sit.py.
+HEALTH_CSV_FIELDS_V2 = HEALTH_CSV_FIELDS_V1 + ["cm4_soc_temp_c"]
+
+# Superset across all versions - what compute_health_window_stats() reports
+# on. A window can legitimately span both V1 and V2 lines (right after this
+# version bump, until 24h of V1-only history ages out); handled by counting
+# each field's own n from whichever samples actually have it, rather than
+# assuming every sample has every field.
+HEALTH_CSV_FIELDS_ALL = HEALTH_CSV_FIELDS_V2
 
 HEALTH_WINDOW_SECONDS = 86400  # 24h - see claude-code-health-logging-patch.md sec 2
 
@@ -291,6 +339,8 @@ def _parse_health_line(line):
         return None
     if version == 1:
         fields = HEALTH_CSV_FIELDS_V1
+    elif version == 2:
+        fields = HEALTH_CSV_FIELDS_V2
     else:
         return None  # unrecognized future version - skip, never crash
     values = parts[2:]
@@ -298,7 +348,9 @@ def _parse_health_line(line):
         return None
     try:
         ts = datetime.datetime.fromisoformat(values[0])
-        data = {name: float(v) for name, v in zip(fields, values[1:])}
+        # Empty string -> missing (e.g. cm4_soc_temp_c when vcgencmd
+        # failed that run), not a parse error - see main()'s fh.write().
+        data = {name: (None if v == "" else float(v)) for name, v in zip(fields, values[1:])}
     except ValueError:
         return None
     return ts, data
@@ -307,9 +359,17 @@ def _parse_health_line(line):
 def compute_health_window_stats(csv_path, window_seconds=HEALTH_WINDOW_SECONDS, now=None):
     """
     Recomputes trailing-window statistics (mean/min/max/population-sd, plus
-    n and the window bounds) for each field in HEALTH_CSV_FIELDS_V1, from
+    n and the window bounds) for each field in HEALTH_CSV_FIELDS_ALL, from
     csv_path's recent history. Capture-time independent by construction:
     the window is anchored on `now`, not on when/whether a capture ran.
+
+    A window can legitimately mix V1 and V2 lines (for 24h after any
+    version bump that adds a field, e.g. cm4_soc_temp_c) or have individual
+    None values (a field that's itself best-effort, e.g. cm4_soc_temp_c
+    when vcgencmd failed that run) - each field's stats are computed only
+    from the samples that actually have a non-None value for it, with its
+    own "n" reported alongside, rather than assuming every sample has every
+    field.
 
     Best-effort by design (see caller): returns None on any hard failure
     (missing/empty/unreadable file, or nothing falls inside the window)
@@ -353,9 +413,12 @@ def compute_health_window_stats(csv_path, window_seconds=HEALTH_WINDOW_SECONDS, 
         "window_end": now.isoformat(),
         "generated": now.isoformat(),
     }
-    for field in HEALTH_CSV_FIELDS_V1:
-        values = [s[field] for s in samples]
+    for field in HEALTH_CSV_FIELDS_ALL:
+        values = [s[field] for s in samples if s.get(field) is not None]
+        if not values:
+            continue  # no sample in this window has this field (yet)
         result[field] = {
+            "n": len(values),
             "mean": statistics.mean(values),
             "min": min(values),
             "max": max(values),
@@ -377,15 +440,17 @@ def main():
     # except and no re-raise. See
     # ubx-data/claude-code-health-logging-patch.md sec. 2.
     try:
+        cm4_temp = cm4_soc_temp_c()  # None if vcgencmd unavailable/failed
         with open(os.path.join(os.path.expanduser("~"), "sit-health.csv"), "a") as fh:
-            fh.write("HEALTH,{},{},{!r},{!r},{!r},{!r},{!r}\n".format(
+            fh.write("HEALTH,{},{},{!r},{!r},{!r},{!r},{!r},{}\n".format(
                 HEALTH_LINE_VERSION,
                 datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
                 siTime.temperature_float,       # 0xA1 resonator temp, C
                 siTime.temperature_err_float,   # 0xB0 temp error, C
                 siTime.heater_power_float,      # 0xA7 heater power, W
                 siTime.heater_power_target_float,
-                siTime.supply_voltage_float))   # 0xA3 supply, V
+                siTime.supply_voltage_float,    # 0xA3 supply, V
+                ("" if cm4_temp is None else repr(cm4_temp))))
     except Exception:
         pass
 

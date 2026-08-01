@@ -106,20 +106,34 @@ Installs and enables:
 
   Since 2026-08-01, each run also appends a versioned
   `HEALTH,<version>,...` line to `~/sit-health.csv` (UTC timestamp,
-  resonator temp, temp error, heater power + target, supply voltage) -
-  `HEALTH_LINE_VERSION` in `save-SiT5721.py`, bumped alongside any future
-  field-list change, same convention as mbt-ubx-apps'
-  `CSV_LINE_VERSION`/`CSV_LINE_FIELDS_V<N>` (adopted here before this file
-  had more than one unversioned row in production - a reader can dispatch
-  on version instead of guessing column count). `SiT5721.__init__()`
-  already calls `read_SiT_operation()` to populate these, so this is free
-  (no extra I2C traffic), and it's wrapped in a bare `try`/`except: pass`
-  so a logging failure can never affect the actual register-save this
-  timer exists for. 144 samples/day this way, vs. the once-daily spot
-  values mbt-ubx-apps' capture logs - enough for a real daily mean and to
-  resolve diurnal structure. Motivation and design:
+  resonator temp, temp error, heater power + target, supply voltage, CM4
+  SoC temp) - `HEALTH_LINE_VERSION` in `save-SiT5721.py` (currently 2),
+  bumped alongside any future field-list change, same convention as
+  mbt-ubx-apps' `CSV_LINE_VERSION`/`CSV_LINE_FIELDS_V<N>` (adopted here
+  before this file had more than one unversioned row in production - a
+  reader can dispatch on version instead of guessing column count).
+  `SiT5721.__init__()` already calls `read_SiT_operation()` to populate the
+  SiT fields, so those are free (no extra I2C traffic); CM4 SoC temp is a
+  `vcgencmd measure_temp` subprocess call (`cm4_soc_temp_c()`, best-effort -
+  empty column if it fails). The whole append is wrapped in a bare
+  `try`/`except: pass` so a logging failure can never affect the actual
+  register-save this timer exists for. 144 samples/day this way, vs. the
+  once-daily spot values mbt-ubx-apps' capture logs - enough for a real
+  daily mean and to resolve diurnal structure. Motivation and design:
   `ubx-data/claude-code-health-logging-patch.md`. No new systemd unit -
   this rides along on the existing timer.
+
+  **Why `vcgencmd` here but sysfs in `get-data.py`**: this sampler's writes
+  are already best-effort and 10-min cadence can absorb a subprocess call
+  failing/blocking; the daily capture path cannot - `vcgencmd` talks to the
+  VideoCore mailbox and can block, fail on a missing package, or fail on
+  `/dev/vcio` permissions, none of which may ever touch a capture. See
+  `ubx-data/claude-code-throttle-note.md`, which also proposes a *second*,
+  not-yet-implemented column here - `vcgencmd get_throttled`'s sticky
+  under/over-voltage bits, logged as raw hex - as a lead on the cycle-day-20
+  drift instability (a sagging/noisy CM4 rail). Deliberately not started
+  yet: that note says explicitly to do it only after this patch has landed
+  and settled.
 
   Also since 2026-08-01: each run recomputes trailing-24h statistics
   (mean/min/max/population-sd, plus `n` and the window bounds) over
