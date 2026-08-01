@@ -6,7 +6,9 @@ from zoneinfo import ZoneInfo
 import configparser
 import contextlib
 import io
+import json
 import os
+import statistics
 import sys
 import tempfile
 
@@ -226,9 +228,185 @@ class SiT5721_settings:
         print("Max. Freq Ramp Rate   ", self.max_freq_ramp_rate)
 
 
+# Bump when the HEALTH,<version>,... line's field list changes, and give
+# any reader (e.g. a future Step-3 sliding-window computation) an explicit
+# per-version field list to dispatch on - same convention as mbt-ubx-apps'
+# CSV_LINE_VERSION/CSV_LINE_FIELDS_V<N> in parse_sit.py, adopted here before
+# ~/sit-health.csv had more than one unversioned row in production.
+HEALTH_LINE_VERSION = 1
+
+# Field order for a HEALTH,1,... line, timestamp excluded (handled
+# separately in _parse_health_line) - must match main()'s fh.write() above.
+HEALTH_CSV_FIELDS_V1 = [
+    "resonator_temp_c", "temp_error_c", "heater_power_w",
+    "heater_power_target_w", "supply_v",
+]
+
+HEALTH_WINDOW_SECONDS = 86400  # 24h - see claude-code-health-logging-patch.md sec 2
+
+
+def _read_health_tail(path, tail_bytes=64 * 1024):
+    """
+    Reads the tail of `path`, bounded to `tail_bytes` - O(1) as the file
+    grows forever (append-only). 64 KB is ~800 samples at the 600s sample
+    rate (~5.5 days), comfortably more than the 24h window ever needs.
+
+    :param str path: path to sit-health.csv (or a test file, same format)
+    :param int tail_bytes: how much of the file's tail to read
+    :return list[str]: complete lines from near the end of the file (the
+        first line is dropped whenever the seek landed mid-file, since it
+        may be a partial line)
+    """
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - tail_bytes))
+        chunk = fh.read()
+    lines = chunk.decode("utf-8", errors="replace").splitlines()
+    if size > tail_bytes and lines:
+        lines = lines[1:]  # drop a possibly-partial first line
+    return lines
+
+
+def _parse_health_line(line):
+    """
+    Parses one HEALTH,<version>,... line. Values are plain reprs of floats/
+    ints and an ISO timestamp - none can contain a comma, so a plain split
+    is safe (unlike parse_sit.py's CSV_LINE_RE, which uses csv.reader
+    because build_csv_line() there does carry enum-ish string fields).
+
+    :param str line: one line from sit-health.csv
+    :return tuple[datetime.datetime, dict] | None: (UTC timestamp,
+        {field: float}), or None if the line is not a recognized,
+        well-formed HEALTH line - corrupt/truncated/unknown-version lines
+        are skipped, never raised, so one bad line can't lose the rest of
+        the window
+    """
+    parts = line.split(",")
+    if len(parts) < 2 or parts[0] != "HEALTH":
+        return None
+    try:
+        version = int(parts[1])
+    except ValueError:
+        return None
+    if version == 1:
+        fields = HEALTH_CSV_FIELDS_V1
+    else:
+        return None  # unrecognized future version - skip, never crash
+    values = parts[2:]
+    if len(values) != 1 + len(fields):  # + 1 for the timestamp
+        return None
+    try:
+        ts = datetime.datetime.fromisoformat(values[0])
+        data = {name: float(v) for name, v in zip(fields, values[1:])}
+    except ValueError:
+        return None
+    return ts, data
+
+
+def compute_health_window_stats(csv_path, window_seconds=HEALTH_WINDOW_SECONDS, now=None):
+    """
+    Recomputes trailing-window statistics (mean/min/max/population-sd, plus
+    n and the window bounds) for each field in HEALTH_CSV_FIELDS_V1, from
+    csv_path's recent history. Capture-time independent by construction:
+    the window is anchored on `now`, not on when/whether a capture ran.
+
+    Best-effort by design (see caller): returns None on any hard failure
+    (missing/empty/unreadable file, or nothing falls inside the window)
+    rather than raising, so a corrupt log can't take down the register-save
+    this rides along with. Never extrapolates or back-fills a short
+    window - n is reported honestly instead.
+
+    :param str csv_path: path to sit-health.csv (or a test file, same format)
+    :param float window_seconds: trailing window width, in seconds -
+        overridable so this can be exercised against a small synthetic
+        window before trusting it at real 24h scale
+    :param datetime.datetime now: reference "now" for the window's end -
+        overridable for tests; defaults to the real current UTC time
+    :return dict | None: cooked stats dict (JSON-serializable), or None if
+        nothing could be computed at all
+    """
+    if now is None:
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
+    window_start = now - datetime.timedelta(seconds=window_seconds)
+
+    try:
+        lines = _read_health_tail(csv_path)
+    except OSError:
+        return None
+
+    samples = []
+    for line in lines:
+        parsed = _parse_health_line(line)
+        if parsed is None:
+            continue
+        ts, data = parsed
+        if window_start <= ts <= now:
+            samples.append(data)
+
+    if not samples:
+        return None
+
+    result = {
+        "n": len(samples),
+        "window_start": window_start.isoformat(),
+        "window_end": now.isoformat(),
+        "generated": now.isoformat(),
+    }
+    for field in HEALTH_CSV_FIELDS_V1:
+        values = [s[field] for s in samples]
+        result[field] = {
+            "mean": statistics.mean(values),
+            "min": min(values),
+            "max": max(values),
+            # Population sd (statistics.pstdev): this window IS the whole
+            # population being described, not a sample of a larger one.
+            "sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
+        }
+    return result
+
+
 def main():
     # config = configparser.ConfigParser()
     siTime = SiT5721(bus, address)
+
+    # Health-log append (2026-08-01): SiT5721.__init__() above already
+    # calls read_SiT_operation(), so these values are already in memory -
+    # no extra I2C traffic. This service's job is saving register state;
+    # a logging failure here must never prevent that, hence the bare
+    # except and no re-raise. See
+    # ubx-data/claude-code-health-logging-patch.md sec. 2.
+    try:
+        with open(os.path.join(os.path.expanduser("~"), "sit-health.csv"), "a") as fh:
+            fh.write("HEALTH,{},{},{!r},{!r},{!r},{!r},{!r}\n".format(
+                HEALTH_LINE_VERSION,
+                datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
+                siTime.temperature_float,       # 0xA1 resonator temp, C
+                siTime.temperature_err_float,   # 0xB0 temp error, C
+                siTime.heater_power_float,      # 0xA7 heater power, W
+                siTime.heater_power_target_float,
+                siTime.supply_voltage_float))   # 0xA3 supply, V
+    except Exception:
+        pass
+
+    # Trailing 24h statistics, recomputed from scratch every run (2026-08-01,
+    # Step 3) - capture-time independent by construction (see
+    # compute_health_window_stats()'s docstring), so this is unaffected by
+    # whenever mbt-ubx-apps' daily capture happens to run. Best-effort, same
+    # reasoning as the health-log append above: this must never affect the
+    # register-save.
+    try:
+        stats = compute_health_window_stats(
+            os.path.join(os.path.expanduser("~"), "sit-health.csv"))
+        if stats is not None:
+            buf = io.StringIO()
+            json.dump(stats, buf, indent=2)
+            atomic_write_text(
+                os.path.join(os.path.expanduser("~"), "sit-health-24h.json"),
+                buf.getvalue())
+    except Exception:
+        pass
+
     SiT_config = SiT5721_settings()
 
     # siTime.read_SiT_static()  # Populated on init

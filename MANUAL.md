@@ -104,6 +104,41 @@ Installs and enables:
   `screen`+`watch` mechanism (retired 2026-07-03) — the interval is now a
   normal systemd parameter, not a shell one-liner.
 
+  Since 2026-08-01, each run also appends a versioned
+  `HEALTH,<version>,...` line to `~/sit-health.csv` (UTC timestamp,
+  resonator temp, temp error, heater power + target, supply voltage) -
+  `HEALTH_LINE_VERSION` in `save-SiT5721.py`, bumped alongside any future
+  field-list change, same convention as mbt-ubx-apps'
+  `CSV_LINE_VERSION`/`CSV_LINE_FIELDS_V<N>` (adopted here before this file
+  had more than one unversioned row in production - a reader can dispatch
+  on version instead of guessing column count). `SiT5721.__init__()`
+  already calls `read_SiT_operation()` to populate these, so this is free
+  (no extra I2C traffic), and it's wrapped in a bare `try`/`except: pass`
+  so a logging failure can never affect the actual register-save this
+  timer exists for. 144 samples/day this way, vs. the once-daily spot
+  values mbt-ubx-apps' capture logs - enough for a real daily mean and to
+  resolve diurnal structure. Motivation and design:
+  `ubx-data/claude-code-health-logging-patch.md`. No new systemd unit -
+  this rides along on the existing timer.
+
+  Also since 2026-08-01: each run recomputes trailing-24h statistics
+  (mean/min/max/population-sd, plus `n` and the window bounds) over
+  `~/sit-health.csv` and atomically writes them to `~/sit-health-24h.json`
+  (`compute_health_window_stats()`). Capture-time independent by
+  construction - the window is anchored on "now", not on when/whether a
+  capture ran, so this is unaffected by mbt-ubx-apps' daily capture timing.
+  Reads only the tail of the log (bounded to 64 KB, ~5.5 days at this
+  sample rate) so this stays O(1) as the log grows. `n` is reported
+  honestly rather than extrapolated - expect a small `n` for the first 24h
+  after this was deployed, and after any gap in samples (reboot, missed
+  runs). Best-effort, same reasoning as the health-log append. Tested
+  against synthetic logs (known ramp + outlier, a window spanning >24h,
+  a 3-sample partial window, corrupt/truncated lines, missing/empty file,
+  and capture-time independence) before being wired into real runs. Not
+  yet consumed anywhere - the next step (deferred until this has run long
+  enough to trust) is having mbt-ubx-apps' `get-data.py` copy these cooked
+  values into its own CSV line.
+
 ## Operations
 
 - **Check the save timer**: `systemctl list-timers save-sit5721.timer`,
@@ -143,6 +178,8 @@ writes it, never reads it back.
 |---|---|
 | `~/SiT-settings2.ini` | Persisted register state, read by `restart-SiT5721.py` on boot. Relocated 2026-07-07 from `SiT-settings2.ini` inside this repo to `$HOME` (`restart-SiT5721.py`'s `DEFAULT_SETTINGS_FILE`, `save-SiT5721.py`'s default, and `systemd/save-sit5721.service`'s `ExecStart` arg all updated together, commit `775e78a`) - has a `[DEFAULT]` section with its own always-`1970-01-01` stub `datetime` - the real save timestamp is under `[Current]`; anything parsing this file must anchor on `[Current]`, not just grep the first `datetime` line (this bit `reinstall.sh` once). Also read-only pushed to the NAS by mbt-ubx-apps' `../ubx-data/nas-sync/` (one-way, never written back) - see that project's manual |
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
+| `~/sit-health.csv` | Append-only health-telemetry log, one line per `save-SiT5721.py` run (every 10 min) - see above. Pushed to the NAS best-effort by mbt-ubx-apps' `nas-sync.sh` |
+| `~/sit-health-24h.json` | Cooked trailing-24h statistics over `~/sit-health.csv`, rewritten atomically every run - see above |
 | `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
