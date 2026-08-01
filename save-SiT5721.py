@@ -240,11 +240,14 @@ def cm4_soc_temp_c():
     enclosure-interior temperature - the LEA-M8F (mbt-ubx-apps) is not
     temperature-compensated the way the SiT5721 is, so this is relevant to
     phase-measurement noise. mbt-ubx-apps' get-data.py already reads this
-    once/day into the main capture via its own copy of this function (small
-    enough, and these are independent repos, to duplicate rather than share -
-    same call as this file's own atomic_write_text()). Best-effort: never
-    raises, so a missing/misbehaving vcgencmd can't affect the register-save
-    this rides along with.
+    once/day into the main capture via its own copy of this function - but
+    that copy deliberately reads sysfs, not vcgencmd, since it runs on the
+    capture path and this subprocess call must never touch that (see
+    ubx-data/claude-code-throttle-note.md). Safe here because this 10-min
+    sampler is already best-effort. Duplicated rather than shared since
+    these are independent repos (same call as this file's own
+    atomic_write_text()). Never raises, so a missing/misbehaving vcgencmd
+    can't affect the register-save this rides along with.
 
     :return float | None: SoC temperature in C, or None if unavailable
     """
