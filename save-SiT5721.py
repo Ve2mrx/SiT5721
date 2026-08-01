@@ -229,6 +229,18 @@ class SiT5721_settings:
         print("Max. Freq Ramp Rate   ", self.max_freq_ramp_rate)
 
 
+# Last-known failure reason per health field, keyed by field name (e.g.
+# "cm4_soc_temp_c" -> "FileNotFoundError: ..."). A field silently going
+# empty is indistinguishable from "hasn't run long enough yet" unless
+# something records *why* - see claude-code-silent-telemetry-failure-brief.md.
+# Only ever reflects the current run (this script is a fresh process each
+# time save-sit5721.timer fires, so there's no history across runs beyond
+# what main() reads immediately after calling into this) - that's fine,
+# it's read once per run by main() before compute_health_window_stats()
+# turns it into a warning.
+_LAST_HEALTH_ERRORS = {}
+
+
 def cm4_soc_temp_c():
     """
     CM4 SoC temperature in degrees C, via `vcgencmd measure_temp` (the
@@ -247,7 +259,9 @@ def cm4_soc_temp_c():
     sampler is already best-effort. Duplicated rather than shared since
     these are independent repos (same call as this file's own
     atomic_write_text()). Never raises, so a missing/misbehaving vcgencmd
-    can't affect the register-save this rides along with.
+    can't affect the register-save this rides along with - but the reason
+    for a failure is recorded in _LAST_HEALTH_ERRORS so it isn't just a
+    silent empty field (see claude-code-silent-telemetry-failure-brief.md).
 
     :return float | None: SoC temperature in C, or None if unavailable
     """
@@ -258,10 +272,13 @@ def cm4_soc_temp_c():
             capture_output=True, text=True, timeout=2, check=True,
         ).stdout.strip()
         if not out.startswith("temp="):
-            return None
-        return float(out[len("temp="):].split("'")[0])
-    except (OSError, ValueError, subprocess.SubprocessError):
+            raise ValueError(f"unexpected vcgencmd output: {out!r}")
+        value = float(out[len("temp="):].split("'")[0])
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _LAST_HEALTH_ERRORS["cm4_soc_temp_c"] = f"{type(exc).__name__}: {exc}"
         return None
+    _LAST_HEALTH_ERRORS.pop("cm4_soc_temp_c", None)
+    return value
 
 
 # Bump when the HEALTH,<version>,... line's field list changes, and give
@@ -374,6 +391,17 @@ def compute_health_window_stats(csv_path, window_seconds=HEALTH_WINDOW_SECONDS, 
     own "n" reported alongside, rather than assuming every sample has every
     field.
 
+    Also reports "warnings": a field with n == 0 while the window has rows
+    is a genuinely broken field, not just an empty one - see
+    claude-code-silent-telemetry-failure-brief.md. This has to be told apart
+    from a field that's simply *newer* than the window (a fresh
+    HEALTH_LINE_VERSION bump legitimately has n == 0 for up to 24h while
+    older-version rows age out): a sample's dict only has a key for fields
+    its own version's HEALTH_CSV_FIELDS_V<N> list includes (see
+    _parse_health_line), so "no sample in the window even carries this key"
+    means "too new", not "broken" - only warn when at least one sample
+    carries the key but its value is always None.
+
     Best-effort by design (see caller): returns None on any hard failure
     (missing/empty/unreadable file, or nothing falls inside the window)
     rather than raising, so a corrupt log can't take down the register-save
@@ -416,19 +444,30 @@ def compute_health_window_stats(csv_path, window_seconds=HEALTH_WINDOW_SECONDS, 
         "window_end": now.isoformat(),
         "generated": now.isoformat(),
     }
+    warnings = []
     for field in HEALTH_CSV_FIELDS_ALL:
         values = [s[field] for s in samples if s.get(field) is not None]
-        if not values:
-            continue  # no sample in this window has this field (yet)
-        result[field] = {
-            "n": len(values),
-            "mean": statistics.mean(values),
-            "min": min(values),
-            "max": max(values),
-            # Population sd (statistics.pstdev): this window IS the whole
-            # population being described, not a sample of a larger one.
-            "sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
-        }
+        if values:
+            result[field] = {
+                "n": len(values),
+                "mean": statistics.mean(values),
+                "min": min(values),
+                "max": max(values),
+                # Population sd (statistics.pstdev): this window IS the whole
+                # population being described, not a sample of a larger one.
+                "sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
+            }
+            continue
+        # No non-None value anywhere in the window. Only a real warning if
+        # some sample's version actually carries this field - otherwise
+        # every sample predates it (see docstring).
+        if any(field in s for s in samples):
+            reason = _LAST_HEALTH_ERRORS.get(field)
+            msg = f"{field}: no samples in window ({len(samples)} rows present)"
+            if reason:
+                msg += f" - last error: {reason}"
+            warnings.append(msg)
+    result["warnings"] = warnings
     return result
 
 

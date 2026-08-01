@@ -48,6 +48,25 @@ with mbt-ubx-apps (single source of truth — see that submodule's own
 README). If you cloned without `--recurse-submodules`, run
 `git submodule update --init` before running any of them.
 
+Since 2026-08-01, `install.sh` also runs a **read-only health-telemetry
+self-check** after symlinking: imports `save-SiT5721.py` and exercises
+the same read paths its `main()` uses (SiT registers via
+`SiT5721.__init__()`, CM4 SoC temp via `cm4_soc_temp_c()`) without
+running `main()` itself, so `~/SiT-settings2.ini`/`~/sit-health.csv` are
+never touched. Prints `OK` if every field read cleanly, or one `WARN`
+line per broken field with the real exception text otherwise - never
+fails the install over it (best-effort sampler, not the register-save).
+Catches a dead register or missing `vcgencmd` immediately instead of
+waiting up to 24h for `sit-status.sh`'s own warning to have enough
+window data to judge (see [Key files/paths](#key-filespaths) below and
+`ubx-data/claude-code-silent-telemetry-failure-brief.md`). Originally
+added to `../ubx-data/reinstall.sh`, then moved here (git-tracked,
+available on a standalone `./install.sh` too, matches that script's own
+pattern of delegating repo-specific checks to each repo) - see that
+file's dated changelog for the move and the accompanying
+`run_installers()` fix (it used to discard `install.sh`'s output
+entirely, which would have swallowed this warning).
+
 For provisioning a whole fresh device (OS reinstall/SD-card swap) rather
 than just this repo, see
 [../ubx-data/reinstall.sh](../ubx-data/reinstall.sh) — it drives the
@@ -148,10 +167,33 @@ Installs and enables:
   runs). Best-effort, same reasoning as the health-log append. Tested
   against synthetic logs (known ramp + outlier, a window spanning >24h,
   a 3-sample partial window, corrupt/truncated lines, missing/empty file,
-  and capture-time independence) before being wired into real runs. Not
-  yet consumed anywhere - the next step (deferred until this has run long
-  enough to trust) is having mbt-ubx-apps' `get-data.py` copy these cooked
-  values into its own CSV line.
+  and capture-time independence) before being wired into real runs.
+
+  **Since 2026-08-01: failures are surfaced, not just silently empty**
+  (`ubx-data/claude-code-silent-telemetry-failure-brief.md`). `None` from a
+  failed read used to just become an empty CSV field indistinguishable from
+  "sampler hasn't run long enough yet." Now: `cm4_soc_temp_c()` records
+  *why* it failed in a module-level `_LAST_HEALTH_ERRORS` dict (cleared on
+  success, never raises - a bad read still can't affect the register-save);
+  `compute_health_window_stats()` adds a `warnings` list (always present,
+  `[]` when healthy) to `sit-health-24h.json` - one entry per field in
+  `HEALTH_CSV_FIELDS_ALL` with `n == 0` while the window has rows, appending
+  the recorded reason when there is one. The one subtlety: a field that's
+  simply *newer* than the window (right after a `HEALTH_LINE_VERSION` bump,
+  for up to 24h while older-version rows age out) must **not** warn - told
+  apart because a sample's parsed dict only carries a key for fields its own
+  version's field list includes, so "no sample even carries the key" means
+  "too new" rather than "broken." Verified against all 6 cases in the
+  brief's test plan (healthy, broken field with/without a recorded reason,
+  version-bump window, mixed V1/V2 window, missing/empty/corrupt file) plus
+  a real live run. `capture-status/sit-status.sh` reads this file and
+  reports **WARN** (not FAIL/NO-GO - diagnostic only, no email alert) for a
+  non-empty `warnings` list or a stale/missing file - see that project's
+  manual.
+
+  Not yet consumed anywhere else - the next step (deferred until this has
+  run long enough to trust) is having mbt-ubx-apps' `get-data.py` copy
+  these cooked values into its own CSV line.
 
 ## Operations
 
