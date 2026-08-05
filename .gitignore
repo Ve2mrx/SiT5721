@@ -4,3 +4,9 @@ SiT-settings2.ini
 SiT-settings2_*.ini
 write-SiT5721_history.txt
 SiT-save_status.txt
+
+# Device-local calibration values + audit log (write-SiT5721.py).
+# Defaults live in ~/ so a git checkout/reset can't destroy them; these entries
+# cover the case where someone points --file/--log at the repo instead.
+SiT5721-pull-values.csv
+SiT5721-write-log.csv

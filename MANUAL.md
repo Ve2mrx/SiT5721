@@ -206,10 +206,36 @@ Installs and enables:
   `./restart-SiT5721.py --dry-run` (dry-run never writes the power-loss
   mark file below, even if registers are currently at defaults)
 - **Manual recalibration** (after a few days of fresh capture data from
-  mbt-ubx-apps, per the normal drift-correction workflow): edit
-  `write-SiT5721.py`'s hardcoded `new_pull_value`/`target_pull_value`/
-  `new_aging_compensation`, then run it. This is a deliberate manual step,
-  not automated.
+  mbt-ubx-apps, per the normal drift-correction workflow): append a row to
+  **`~/SiT5721-pull-values.csv`**, then `./write-SiT5721.py` to review the plan
+  and `./write-SiT5721.py --commit` to apply it. Deliberately manual - the
+  decision to re-tune is never automated.
+  - ⚠ **Dry run is the default.** Nothing is written without `--commit`. The
+    pre-2026-08-05 version wrote all four registers on *every* run, so merely
+    inspecting the device changed it. Use `--show` to read and stop.
+  - Values live **outside the repo** (like `SiT-settings2.ini`), so a
+    `git checkout`/reset cannot destroy the calibration history, and they
+    survive a `git pull` on the device. Override with `--file`.
+  - Missing values file -> an annotated example is written there and the
+    script exits **without touching the device**.
+  - **`pull` is the raw Pull register value and is written verbatim** - copy it
+    from the workbook, `Calc-new-<cycle>` **row 75, last DAY column** (not the
+    rightmost; skeleton columns carry copies). The script does *not* recompute
+    it. The workbook already converts target -> register (row 75 = row 73 -
+    row 74) using the uptime at *calculation* time; redoing that on the device
+    would use the uptime at *write* time and give a different number. After a
+    power loss, where uptime is ~0, it would collapse to `pull = target` and be
+    wrong by the whole accumulated compensation - 0.89 ppb on the real
+    2026-03-28 re-tune, in exactly the scenario the script is used for.
+  - `target_pull` (workbook row 73) is recorded in the CSV for provenance only.
+    `SiT5721.pull_for_target()` exists but is **deliberately unwired**, as
+    `calc_SiT_new_pull_value_from_target()` was before it.
+  - Registers are written constraints-first (range, ramp, aging, pull), then
+    read back and verified, then appended to `~/SiT5721-write-log.csv`.
+  - Refuses to write on: `target_pull = 0` (would wipe the calibration),
+    an aging exponent outside +/-1e-12, a Pull that exceeds Pull Range, or a
+    device that is not `good, stabilized`. Override with `--allow-zero` /
+    `--force`.
 - **Mail failures**: check `~/SiT-restart_mail-failures.log` if an
   expected alert never arrived.
 
@@ -236,7 +262,9 @@ writes it, never reads it back.
 | `SiT-save_status.txt` | Last terminal output of `save-SiT5721.py`, for monitoring |
 | `~/sit-health.csv` | Append-only health-telemetry log, one line per `save-SiT5721.py` run (every 10 min) - see above. Pushed to the NAS best-effort by mbt-ubx-apps' `nas-sync.sh` |
 | `~/sit-health-24h.json` | Cooked trailing-24h statistics over `~/sit-health.csv`, rewritten atomically every run - see above |
-| `write-SiT5721_history.txt` | Manually-maintained log of past calibration values (untracked, local only) |
+| `~/SiT5721-pull-values.csv` | **Calibration values + history for this device**, read by `write-SiT5721.py` (last row wins). Untracked, local only; an annotated example is created if missing |
+| `~/SiT5721-write-log.csv` | Append-only audit of every committed write: intended target, derived Pull, and the device's before/after readings |
+| `write-SiT5721_history.txt` | *Superseded 2026-08-05* by `~/SiT5721-pull-values.csv`. Manually-maintained log of past calibration values (untracked, local only) |
 | `~/SiT-power-loss-mark.json` | Written by `restart-SiT5721.py` on a confirmed power-loss recalc; consumed by mbt-ubx-apps' `restart-calib.sh` |
 | `~/SiT-restart_mail-failures.log` | Retry/failure log for `restart-sit5721-pull-alert.sh`'s mail sends |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with mbt-ubx-apps) - `SiT5721` I2C class |
