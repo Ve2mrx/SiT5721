@@ -230,10 +230,28 @@ Installs and enables:
   - `target_pull` (workbook row 73) is recorded in the CSV for provenance only.
     `SiT5721.pull_for_target()` exists but is **deliberately unwired**, as
     `calc_SiT_new_pull_value_from_target()` was before it.
-  - Registers are written constraints-first (range, ramp, aging, pull), then
-    read back and verified, then appended to `~/SiT5721-write-log.csv`.
-  - Refuses to write on: `target_pull = 0` (would wipe the calibration),
-    an aging exponent outside +/-1e-12, a Pull that exceeds Pull Range, or a
+  - Registers are written **pull -> aging -> range -> ramp**, the same order as
+    `restart-SiT5721.py`, then read back and verified, then appended to
+    `~/SiT5721-write-log.csv`. Pull goes first so that a bus failure part-way
+    through leaves the calibration *applied* with the constraint registers at
+    their (correct, default) values, rather than the reverse. A partial write
+    is caught, reported, and still logged - it never raises past the audit log.
+  - **Every I2C operation is retried up to 3 times** on a transient `OSError`
+    (`EREMOTEIO`/`ETIMEDOUT`), with a short backoff. Safe because each
+    operation is idempotent - the same float32 to the same register lands the
+    same state - so a retry cannot compound a partial write. Retries are
+    per-operation, never a replay of the whole four-register sequence.
+    - ⚠ A retry that *succeeds* is still reported on stderr and recorded in the
+      `i2c_retries` column of `~/SiT5721-write-log.csv`. A bus that needs a
+      second attempt is a hardware signal - do not ignore it because the write
+      worked.
+    - This is **not** protection against `save-SiT5721.py` (600 s timer) or
+      `get-data.py` touching the bus: the kernel i2c core locks the adapter per
+      transfer, so those serialise rather than collide.
+  - Refuses to write on: **`pull` = 0** (the value actually written - would
+    wipe the calibration; `target_pull` is provenance only and is never
+    checked), an aging exponent outside +/-1e-12, a Pull that exceeds either
+    the Pull Range being written or the one currently on the device, or a
     device that is not `good, stabilized`. Override with `--allow-zero` /
     `--force`.
 - **Mail failures**: check `~/SiT-restart_mail-failures.log` if an

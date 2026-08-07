@@ -20,7 +20,15 @@ the script exits WITHOUT touching the device.
 
 !! DRY RUN IS THE DEFAULT. The previous version wrote all four registers on
    every single run, so merely inspecting the device changed it. You must now
-   pass --commit. Nothing else about the register writes has changed.
+   pass --commit.
+
+   The register writes themselves are unchanged in value. Three behavioural
+   changes: the order is now pull -> aging -> range -> ramp, matching
+   restart-SiT5721.py exactly (was pull -> range -> aging -> ramp; the swap is
+   inert, see main()); every I2C operation is retried up to I2C_ATTEMPTS times
+   on a transient OSError, and any retry is reported and logged even when it
+   ultimately succeeds; and a failure that survives the retries is caught and
+   recorded rather than raising and skipping the audit log.
 
 --------------------------------------------------------------------------
 WHAT GETS WRITTEN, AND WHY IT IS NOT DERIVED HERE
@@ -76,17 +84,38 @@ import datetime
 import os
 import struct
 import sys
+import time
 
 I2C_BUS = 0
 I2C_ADDRESS = 0x60
+
+# Transient-failure retry for every I2C operation. RPi I2C does produce
+# occasional EREMOTEIO / ETIMEDOUT (device NAK, clock stretching); one retry
+# usually clears it.
+#
+# This is safe ONLY because every operation here is idempotent: writing the
+# same float32 to the same register lands the same state, and reads have no
+# side effects. A retry therefore cannot compound a partial write.
+# !! Do NOT "simplify" this into a retry of the whole four-register sequence.
+#    Per-operation retry preserves the pull -> aging -> range -> ramp ordering
+#    and keeps `written` an accurate record of how far the sequence got.
+#
+# NB this does NOT guard against contention with save-SiT5721.py (600 s timer)
+# or get-data.py: the kernel i2c core locks the adapter per transfer, so those
+# serialise rather than collide. The retry is for device-level failures.
+I2C_ATTEMPTS = 3
+I2C_RETRY_DELAY_S = 0.15       # multiplied by the attempt number
 
 DEFAULT_VALUES_FILE = os.path.expanduser("~/SiT5721-pull-values.csv")
 DEFAULT_LOG_FILE = os.path.expanduser("~/SiT5721-write-log.csv")
 
 # Bump when the values-CSV column set changes. Written as the first column of
-# every row so a reader can dispatch per row and one file may hold a mix -
-# same convention as CSV_LINE_VERSION in mbt-ubx-apps and HEALTH_LINE_VERSION
-# in save-SiT5721.py.
+# every row, same convention as CSV_LINE_VERSION in mbt-ubx-apps and
+# HEALTH_LINE_VERSION in save-SiT5721.py, so a file may hold a mix of
+# versions and a reader could dispatch per row.
+# NB load_values() does NOT dispatch: it reads the last row and hard-errors if
+# that row's ver is not VALUES_VERSION. Old rows are kept as history and are
+# never parsed. Deliberate - refusing is safer than guessing at a schema.
 #
 # CHANGELOG
 #   1  2026-08-05  initial: ver,date,pull,target_pull,aging,pull_range,
@@ -142,9 +171,9 @@ def load_values(path):
         with open(path, "w", newline="") as fh:
             fh.write(EXAMPLE_CSV)
         print(f"WARNING  no values file at {path}", file=sys.stderr)
-        print(f"WARNING  an annotated example has been written there.",
+        print("WARNING  an annotated example has been written there.",
               file=sys.stderr)
-        print(f"WARNING  EDIT IT, then re-run. Nothing was written to the device.",
+        print("WARNING  EDIT IT, then re-run. Nothing was written to the device.",
               file=sys.stderr)
         return None
 
@@ -163,9 +192,12 @@ def load_values(path):
               f"ver={VALUES_VERSION}", file=sys.stderr)
         return None
 
+    # _data_row counts DATA rows only - comment and blank lines are stripped
+    # above, so this is NOT the line number in the file. Named accordingly
+    # because the two diverge by however many comment lines the header carries.
     out = {"date": (row.get("date") or "").strip(),
            "note": (row.get("note") or "").strip(),
-           "_row": len(rows)}
+           "_data_row": len(rows)}
     for k in ("pull", "aging", "pull_range", "ramp_rate"):
         try:
             out[k] = float(row[k])
@@ -196,10 +228,18 @@ def validate(vals, dev, allow_zero, force):
     if abs(vals["aging"]) > MAX_ABS_AGING:
         bad.append(f"|aging| {abs(vals['aging']):.3e} > {MAX_ABS_AGING:.0e} - "
                    f"check the exponent")
-    # The Pull register must fit inside the Pull Range or the device clamps it.
-    if abs(vals["pull"]) > vals["pull_range"]:
-        bad.append(f"pull {vals['pull']:.6e} exceeds pull_range "
-                   f"{vals['pull_range']:.3e} - it would be clamped")
+    # The Pull register must fit inside the Pull Range. Check BOTH the range
+    # being written and the one already on the device: Pull is written first
+    # (see main()), so at that instant the device still enforces its existing
+    # range. Identical in every real case - both have always been 1.0E-05 -
+    # but the check costs nothing and the ordering rationale depends on it.
+    # NB "clamped" is the expected behaviour, not a verified one; nothing in
+    # the datasheet extract we hold states it. The read-back would catch it.
+    for what, rng in (("the pull_range being written", vals["pull_range"]),
+                      ("the device's current pull_range", dev.pull_range)):
+        if abs(vals["pull"]) > rng:
+            bad.append(f"pull {vals['pull']:.6e} exceeds {what} "
+                       f"{rng:.3e} - it would be clamped")
     if not force:
         if dev.error_status_str != "good":
             bad.append(f"device error status is '{dev.error_status_str}' "
@@ -337,24 +377,35 @@ class SiT5721:
         print(f"Total offset written    {self.total_offset_written / 1e-6:=+.8g} ppm")
 
 
-def append_log(path, dev_before, dev_after, vals):
+def append_log(path, dev_before, dev_after, vals, written, write_error, retried):
     """Append one audit row: what was intended, what was on the device before,
     and what the device reported after the write. Separate from the values
-    file so that intent and outcome never get confused for one another."""
+    file so that intent and outcome never get confused for one another.
+
+    `written` is the list of register labels that were written before any
+    failure, and `write_error` the exception (or None). A row is appended even
+    when the write failed part-way - a partially-written device that is not
+    recorded anywhere is the worst outcome this script can produce.
+
+    `retried` records any operation that needed more than one attempt. It is
+    logged even on a fully successful write: retries are the leading indicator
+    of a marginal bus, and they are only useful if they accumulate somewhere
+    that can be looked at later."""
     new = not os.path.exists(path)
     with open(path, "a", newline="") as fh:
         w = csv.writer(fh)
         if new:
-            w.writerow(["ver", "written_utc", "values_date", "values_row",
+            w.writerow(["ver", "written_utc", "values_date", "values_data_row",
                         "uptime_s",
                         "pull", "target_pull", "aging",
                         "pull_range", "ramp_rate",
                         "before_pull", "before_aging", "before_total",
                         "after_pull", "after_aging", "after_total",
+                        "registers_written", "write_error", "i2c_retries",
                         "note"])
         w.writerow([VALUES_VERSION,
                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    vals["date"], vals["_row"], dev_before.uptime_uint,
+                    vals["date"], vals["_data_row"], dev_before.uptime_uint,
                     repr(vals["pull"]),
                     ("" if vals["target_pull"] is None else repr(vals["target_pull"])),
                     repr(vals["aging"]), repr(vals["pull_range"]),
@@ -365,12 +416,55 @@ def append_log(path, dev_before, dev_after, vals):
                     repr(dev_after.pull_value),
                     repr(dev_after.aging_compensation),
                     repr(dev_after.total_offset_written),
+                    "|".join(written),
+                    ("" if write_error is None else f"{type(write_error).__name__}: {write_error}"),
+                    "|".join(retried),
                     vals["note"]])
 
 
 def as_f32(x):
     """Value as the device will store it, for read-back comparison."""
     return struct.unpack('f', struct.pack('f', x))[0]
+
+
+def i2c_retry(what, fn, *args):
+    """Run one idempotent I2C operation, retrying transient failures.
+
+    Returns (result, attempts_used). Re-raises the last exception if every
+    attempt fails.
+
+    Only OSError is retried - that is what smbus raises for bus-level trouble
+    (EREMOTEIO, ETIMEDOUT, EIO). A TypeError or struct.error is a bug in this
+    script, and retrying a bug just fails three times more slowly."""
+    last = None
+    for attempt in range(1, I2C_ATTEMPTS + 1):
+        try:
+            return fn(*args), attempt
+        except OSError as exc:
+            last = exc
+            if attempt < I2C_ATTEMPTS:
+                print(f"WARNING  {what}: attempt {attempt}/{I2C_ATTEMPTS} "
+                      f"failed ({exc}) - retrying", file=sys.stderr)
+                time.sleep(I2C_RETRY_DELAY_S * attempt)
+    raise last
+
+
+def report_retries(retried, logged_to=None):
+    """Say so, loudly, whenever an operation needed more than one attempt.
+
+    Deliberately printed even when everything ultimately succeeded, and on the
+    --show and dry-run paths too. A bus that needs retrying is a hardware
+    signal on a system whose whole purpose is frequency stability; swallowing
+    it because the operation worked would hide exactly the kind of slow
+    degradation this project exists to detect."""
+    if not retried:
+        return
+    print(f"NOTE  I2C operations that needed more than one attempt: "
+          f"{', '.join(retried)}", file=sys.stderr)
+    print("NOTE  they succeeded, but a bus needing retries is worth "
+          "investigating (wiring, pull-ups, clock stretching)."
+          + (f" Recorded in {logged_to}." if logged_to else ""),
+          file=sys.stderr)
 
 
 def main():
@@ -380,12 +474,15 @@ def main():
                     help=f"values CSV (default {DEFAULT_VALUES_FILE})")
     ap.add_argument("--log", default=DEFAULT_LOG_FILE,
                     help=f"audit log appended on write (default {DEFAULT_LOG_FILE})")
-    ap.add_argument("--commit", action="store_true",
-                    help="actually write. WITHOUT THIS NOTHING IS WRITTEN.")
-    ap.add_argument("--show", action="store_true",
-                    help="read and print the device, then stop")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--commit", action="store_true",
+                      help="actually write. WITHOUT THIS NOTHING IS WRITTEN.")
+    mode.add_argument("--show", action="store_true",
+                      help="read and print the device, then stop")
+    # Guards `pull` - the value actually written - NOT target_pull, which is
+    # provenance only and never used in a calculation.
     ap.add_argument("--allow-zero", action="store_true",
-                    help="permit target_pull = 0 (resets the calibration)")
+                    help="permit pull = 0 (wipes the calibration)")
     ap.add_argument("--force", action="store_true",
                     help="write even if the device is in error/unstabilized")
     a = ap.parse_args()
@@ -397,11 +494,18 @@ def main():
         print(f"ERROR  cannot open I2C bus {I2C_BUS}: {exc}", file=sys.stderr)
         return 1
 
+    # Collected across the whole run - including the initial read, which is as
+    # much a bus-health sample as the writes are.
+    retried = []            # "<op>:<attempts>" for anything that needed >1 go
+
     try:
-        dev = SiT5721(bus, I2C_ADDRESS)
-    except Exception as exc:
-        print(f"ERROR  cannot read SiT5721 at 0x{I2C_ADDRESS:02X}: {exc}",
-              file=sys.stderr)
+        dev, attempts = i2c_retry(f"initial read of 0x{I2C_ADDRESS:02X}",
+                                  SiT5721, bus, I2C_ADDRESS)
+        if attempts > 1:
+            retried.append(f"initial-read:{attempts}")
+    except OSError as exc:
+        print(f"ERROR  cannot read SiT5721 at 0x{I2C_ADDRESS:02X} "
+              f"({I2C_ATTEMPTS} attempts): {exc}", file=sys.stderr)
         return 1
 
     dev.print_static()
@@ -409,14 +513,16 @@ def main():
     dev.print_dynamic()
 
     if a.show:
+        report_retries(retried)
         return 0
 
     vals = load_values(a.file)
     if vals is None:
+        report_retries(retried)
         return 1
 
     print()
-    print(f"--- Planned write   (from {a.file}, row {vals['_row']}, "
+    print(f"--- Planned write   (from {a.file}, data row {vals['_data_row']}, "
           f"dated {vals['date'] or 'n/a'})")
     if vals["note"]:
         print(f"    note                {vals['note']}")
@@ -441,38 +547,116 @@ def main():
         print()
         for p in problems:
             print(f"REFUSING  {p}", file=sys.stderr)
+        report_retries(retried)
         return 1
 
     if not a.commit:
         print()
         print("DRY RUN - nothing written. Re-run with --commit to apply.")
+        report_retries(retried)
         return 0
 
-    # Constraint registers first, so the Pull value that must satisfy them is
-    # written last and is never briefly outside a stale range.
-    dev.set_pull_range(vals["pull_range"])
-    dev.set_max_freq_ramp_rate(vals["ramp_rate"])
-    dev.set_aging_comp(vals["aging"])
-    dev.set_pull_value(vals["pull"])
+    # ---- WRITE ORDER: pull -> aging -> range -> ramp -----------------------
+    # Identical to restart-SiT5721.py (the automatic power-loss path), which
+    # has run on real hardware. Deliberately NOT "constraints first".
+    #
+    # The two orders can only differ when the range/ramp being written differ
+    # from what is already on the device, and they never have: every historical
+    # values row, save-SiT5721.py and restart-SiT5721.py all use the device
+    # default 1.0E-05, and restart only writes when the chip is at defaults.
+    #
+    # So the tie is broken by what a mid-sequence bus failure leaves behind.
+    # Pull first => a failure leaves the calibration APPLIED, with the three
+    # constraint registers still at their correct default values. Constraints
+    # first => a failure leaves the calibration NOT applied: strictly worse.
+    #
+    # (The old pre-2026-08-05 order was pull -> range -> aging -> ramp. The
+    # aging/range swap is inert; matching restart-SiT5721.py exactly is worth
+    # more than matching the version being replaced.)
+    written = []
+    write_error = None
+    try:
+        for label, setter, value in (
+                ("Pull Value", dev.set_pull_value, vals["pull"]),
+                ("Aging comp.", dev.set_aging_comp, vals["aging"]),
+                ("Pull Range", dev.set_pull_range, vals["pull_range"]),
+                ("Ramp Rate", dev.set_max_freq_ramp_rate, vals["ramp_rate"])):
+            _, attempts = i2c_retry(f"write {label}", setter, value)
+            written.append(label)
+            if attempts > 1:
+                retried.append(f"{label}:{attempts}")
+    except OSError as exc:
+        # Do NOT re-raise. An uncaught traceback here would skip the audit log
+        # entirely, leaving a partially-written device recorded nowhere - the
+        # one outcome this script exists to prevent.
+        write_error = exc
+        print(file=sys.stderr)
+        print(f"ERROR  I2C write failed after {I2C_ATTEMPTS} attempts: {exc}",
+              file=sys.stderr)
+        if written:
+            print(f"ERROR  written before the failure: {', '.join(written)}",
+                  file=sys.stderr)
+            print("ERROR  THE DEVICE IS PARTIALLY WRITTEN. Inspect with "
+                  "--show; re-running with --commit completes the same write.",
+                  file=sys.stderr)
+        else:
+            print("ERROR  the first write failed - NOTHING was written, the "
+                  "device is unchanged. Check the bus, then re-run.",
+                  file=sys.stderr)
 
-    after = SiT5721(bus, I2C_ADDRESS)
+    # Read back whatever the device now holds - especially after a failure,
+    # where the partial state is the thing most worth recording. Retried
+    # harder than the writes deserve, because losing this read is the only
+    # path that produces a written device with no audit row at all.
+    try:
+        after, attempts = i2c_retry("re-read after write",
+                                    SiT5721, bus, I2C_ADDRESS)
+        if attempts > 1:
+            retried.append(f"re-read:{attempts}")
+    except OSError as exc:
+        print(f"ERROR  cannot re-read the device after writing "
+              f"({I2C_ATTEMPTS} attempts): {exc}", file=sys.stderr)
+        print(f"ERROR  NO AUDIT ROW WRITTEN. Registers written: "
+              f"{', '.join(written) if written else 'none'} - record this and "
+              f"the values file row by hand, then re-run --show.",
+              file=sys.stderr)
+        return 1
+
     print()
     print("--- Updated:")
     after.print_short()
 
-    ok = True
+    ok = write_error is None
     for name, got, want in (("Pull Value", after.pull_value, vals["pull"]),
                             ("Aging comp.", after.aging_compensation, vals["aging"]),
                             ("Pull Range", after.pull_range, vals["pull_range"]),
                             ("Ramp Rate", after.max_freq_ramp_rate, vals["ramp_rate"])):
-        if got != as_f32(want):
+        if got == as_f32(want):
+            continue
+        if name in written:
+            # Attempted and still wrong: the device did not take the value.
             print(f"VERIFY FAILED  {name}: device reports {got!r}, "
                   f"expected {as_f32(want)!r}", file=sys.stderr)
             ok = False
+        else:
+            # Never attempted - the write sequence stopped before reaching it.
+            # Not a verification failure; saying so avoids reading a bus fault
+            # as a device that refused a value.
+            print(f"NOT WRITTEN    {name}: still holds {got!r} "
+                  f"(sequence stopped before this register)", file=sys.stderr)
     print()
-    print("Read-back verified." if ok else "READ-BACK MISMATCH - see above.")
+    if write_error is not None:
+        print("WRITE FAILED - device left partially written, see above."
+              if written else
+              "WRITE FAILED - nothing was written, device unchanged.")
+    elif ok:
+        print("Read-back verified.")
+    else:
+        print("READ-BACK MISMATCH - see above.")
 
-    append_log(a.log, dev, after, vals)
+    report_retries(retried, logged_to=a.log)
+
+    append_log(a.log, dev, after, vals, written, write_error, retried)
     print(f"Logged to {a.log}")
     return 0 if ok else 1
 

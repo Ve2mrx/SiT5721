@@ -174,6 +174,11 @@ def main():
     print("Power loss detected (registers at defaults): restoring the "
           "aging-corrected Pull Value.")
 
+    # Order pull -> aging -> range -> ramp. write-SiT5721.py was aligned to
+    # this order 2026-08-06 (it had briefly used constraints-first); keep the
+    # two matching. Pull first means a bus failure part-way through leaves the
+    # calibration applied, with the constraint registers still at the defaults
+    # this path has already confirmed are in place.
     siTime.set_pull_value(new_pull)
     siTime.set_aging_comp(aging)
     siTime.set_pull_range(prange)
